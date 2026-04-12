@@ -1,13 +1,12 @@
 name: Build Release Binaries
 
 on:
-  push:
-    branches: [ master, main ]
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ master, main ]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -75,11 +74,26 @@ jobs:
         name: myssh-${{ matrix.target }}
         path: ${{ env.ARTIFACT_PATH }}
 
-    - name: Release
-      if: startsWith(github.ref, 'refs/tags/v')
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+
+    - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: ${{ env.ARTIFACT_PATH }}
+        files: ./artifacts/**/*.exe,./artifacts/**/myssh-*
+        tag_name: ${{ github.event.inputs.version }}
+        name: Release ${{ github.event.inputs.version }}
         generate_release_notes: true
+        draft: false
+        prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
