@@ -9,7 +9,8 @@ use russh_keys::key::PublicKey;
 #[derive(Debug, Deserialize)]
 struct Config {
     ssh: SshConfig,
-    script: Vec<ScriptStep>,
+    login_script: Vec<ScriptStep>,
+    command: Vec<ScriptStep>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,7 +66,7 @@ async fn main() -> Result<()> {
     let config_str = std::fs::read_to_string("config.toml")?;
     let config: Config = toml::from_str(&config_str)?;
 
-    let total_steps = config.script.len();
+    let total_steps = config.login_script.len() + config.command.len();
     if total_steps == 0 {
         return Ok(());
     }
@@ -88,11 +89,10 @@ async fn main() -> Result<()> {
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    // 发送所有脚本步骤的命令
-    for step_idx in 0..total_steps {
-        let s = &config.script[step_idx];
+    // 执行登录脚本
+    for s in &config.login_script {
         let mut buf = String::new();
-        
+
         loop {
             match channel.wait().await {
                 Some(m) => {
@@ -108,25 +108,43 @@ async fn main() -> Result<()> {
             }
         }
 
-        if step_idx == total_steps - 1 {
-            let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
-            channel.data(cmd.as_bytes()).await?;
-            loop {
-                match channel.wait().await {
-                    Some(m) => {
-                        if let ChannelMsg::Data { ref data } = m {
-                            let txt = String::from_utf8_lossy(data);
-                            if txt.contains("MY_end") {
-                                break;
-                            }
+        let cmd = format!("{}\n", s.send);
+        channel.data(cmd.as_bytes()).await?;
+    }
+
+    // 执行最终命令
+    for s in &config.command {
+        let mut buf = String::new();
+
+        loop {
+            match channel.wait().await {
+                Some(m) => {
+                    if let ChannelMsg::Data { ref data } = m {
+                        let txt = String::from_utf8_lossy(data);
+                        buf.push_str(&txt);
+                        if check_wait_appeared(&s.wait, &buf) {
+                            break;
                         }
                     }
-                    None => return Ok(()),
                 }
+                None => return Ok(()),
             }
-        } else {
-            let cmd = format!("{}\n", s.send);
-            channel.data(cmd.as_bytes()).await?;
+        }
+
+        let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
+        channel.data(cmd.as_bytes()).await?;
+        loop {
+            match channel.wait().await {
+                Some(m) => {
+                    if let ChannelMsg::Data { ref data } = m {
+                        let txt = String::from_utf8_lossy(data);
+                        if txt.contains("MY_end") {
+                            break;
+                        }
+                    }
+                }
+                None => return Ok(()),
+            }
         }
     }
 
