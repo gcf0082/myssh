@@ -1,21 +1,22 @@
 # AGENTS.md
 
-## Build & Run
+## Project Overview
 
-```bash
-cargo build --release
-./target/release/myssh
-```
+Rust SSH automation tool that connects to remote servers and executes scripted commands via `russh`.
 
-## Test
+## Commands
 
-```bash
-./test.sh
-```
+- `cargo build` - Build the project
+- `cargo run` - Run (requires `config.toml` in project root)
+- `cargo test` - Run tests
 
-Or: `cargo test`
+## Architecture
 
-## Requirements
+- **Entry point**: `src/main.rs`
+- **Config**: TOML file at project root loaded at runtime (contains SSH credentials - do not commit)
+- **Execution flow**: Connect SSH → Run `login_script` steps → Run `command` steps → Stream output until Ctrl+C
 
-- `config.toml` must exist in working directory (reads from CWD, not relative to binary)
-- Real SSH server needed for full integration testing
+## Notes
+
+- `.gitignore` already excludes `config.toml`
+- No real tests in `src/lib.rs`; needs real tests added
