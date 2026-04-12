@@ -1,0 +1,21 @@
+# MySSH 配置文件
+
+nodes:
+  - id: "node1"
+    host: "1.1.1.1"
+    port: 22
+    user: "user"
+    password: "pass"
+  - id: "node2"
+    host: "1.1.1.2"
+    port: 22
+    user: "user"
+    password: "pass"
+
+login_script:
+  - name: "SSH登录"
+    wait: "$"
+    send: "su - root"
+  - name: "输入密码"
+    wait: "Password:"
+    send: "pass"
