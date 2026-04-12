@@ -87,8 +87,6 @@ pub async fn execute_ssh(
     channel.request_pty(true, "xterm", 80, 24, 0, 0, &[]).await?;
     channel.request_shell(true).await?;
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     for s in &login_script {
         let mut buf = String::new();
 
@@ -131,62 +129,58 @@ pub async fn execute_ssh(
 
         let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
         channel.data(cmd.as_bytes()).await?;
+        
+        let mut full_buf = String::new();
+        let mut output_start = 0;
+        let mut found_end_marker = false;
+        let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
+        
         loop {
-            match channel.wait().await {
-                Some(m) => {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        if txt.contains("MY_end") {
-                            break;
-                        }
-                    }
-                }
-                None => return Ok(()),
-            }
-        }
-    }
-
-    let mut output_buffer = String::new();
-    let mut in_output = false;
-    let ctrl_c = tokio::signal::ctrl_c();
-    tokio::pin!(ctrl_c);
-    
-    loop {
-        tokio::select! {
-            _ = ctrl_c.as_mut() => {
-                break;
-            }
-            msg = channel.wait() => {
-                if let Some(m) = msg {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        output_buffer.push_str(&txt);
-                        
-                        if !in_output {
-                            if let Some(pos) = txt.find("MY_begin") {
-                                in_output = true;
-                                let rest = &txt[pos + 8..];
-                                if !rest.is_empty() {
-                                    print!("{}", rest);
-                                }
-                            }
-                        } else {
-                            if txt.contains("MY_end") {
-                                if let Some(pos) = txt.find("MY_end") {
-                                    let before_end = &txt[..pos];
-                                    if !before_end.is_empty() {
-                                        print!("{}", before_end);
-                                    }
-                                }
-                                break;
-                            } else {
-                                print!("{}", txt);
-                            }
-                        }
-                    }
-                } else {
+            tokio::select! {
+                _ = ctrl_c.as_mut() => {
                     break;
                 }
+                msg = channel.wait() => {
+                    if let Some(m) = msg {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            full_buf.push_str(&txt);
+                            
+                            if let Some(begin_pos) = full_buf.find("MY_begin\r\n") {
+                                let content_start = begin_pos + 10;
+                                
+                                if content_start > output_start {
+                                    output_start = content_start;
+                                }
+                                
+                                let content = &full_buf[output_start..];
+                                
+                                if content.contains("MY_end") {
+                                    found_end_marker = true;
+                                    
+                                    if let Some(end_pos) = content.find("MY_end") {
+                                        let output = &content[..end_pos];
+                                        let output_clean = output.trim();
+                                        if !output_clean.is_empty() {
+                                            println!("{}", output_clean);
+                                        }
+                                    }
+                                    break;
+                                }
+                                
+                                print!("{}", content);
+                                output_start = full_buf.len();
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            
+            if found_end_marker {
+                break;
             }
         }
     }
