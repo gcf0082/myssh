@@ -1,21 +1,44 @@
-# MySSH 配置文件
+# ==================== 全局默认配置 ====================
+defaults:
+  # 默认 SSH 端口、用户名、密码（节点可覆盖）
+  port: 22
+  user: "user"
+  password: "default_password"
+  # 默认登录脚本（所有节点共用，节点可通过 login_script 字段追加或覆盖）
+  login_script:
+    - name: "SSH登录"
+      wait: "$"
+      send: "su - root"
+    - name: "输入密码"
+      wait: "Password:"
+      send: "{{password}}"   # 占位符，实际执行时用节点最终密码替换
 
+# ==================== 节点列表 ====================
 nodes:
+  # 节点1：完全使用默认配置（复用脚本、密码）
   - id: "node1"
     host: "1.1.1.1"
-    port: 22
-    user: "user"
-    password: "pass"
+
+  # 节点2：复用默认脚本，但使用独立密码
   - id: "node2"
     host: "1.1.1.2"
-    port: 22
-    user: "user"
-    password: "pass"
+    password: "node2_specific_pass"
 
-login_script:
-  - name: "SSH登录"
-    wait: "$"
-    send: "su - root"
-  - name: "输入密码"
-    wait: "Password:"
-    send: "pass"
+  # 节点3：复用默认脚本，但追加额外的脚本步骤
+  - id: "node3"
+    host: "1.1.1.3"
+    login_script_append:       # 在默认脚本后追加步骤
+      - name: "执行特定命令"
+        wait: "#"
+        send: "ifconfig"
+
+  # 节点4：完全覆盖默认脚本，使用自己的登录流程
+  - id: "node4"
+    host: "1.1.1.4"
+    login_script:              # 完全覆盖 defaults.login_script
+      - name: "直接 SSH"
+        wait: "$"
+        send: "sudo -i"
+      - name: "sudo 密码"
+        wait: "password for"
+        send: "sudo_pass"

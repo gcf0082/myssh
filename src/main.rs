@@ -4,17 +4,41 @@ use std::collections::HashSet;
 
 #[derive(Debug, serde::Deserialize)]
 struct Config {
+    #[serde(default)]
+    pub defaults: DefaultsConfig,
     pub nodes: Vec<NodeConfig>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct DefaultsConfig {
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
     pub login_script: Vec<myssh::ScriptStep>,
+}
+
+fn default_port() -> u16 {
+    22
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
 struct NodeConfig {
     pub id: String,
     pub host: String,
+    #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default)]
     pub user: String,
+    #[serde(default)]
     pub password: String,
+    #[serde(default)]
+    pub login_script: Vec<myssh::ScriptStep>,
+    #[serde(default)]
+    pub login_script_append: Vec<myssh::ScriptStep>,
 }
 
 #[derive(Parser, Debug)]
@@ -24,6 +48,34 @@ struct Cli {
     command: String,
     #[arg(short, long, help = "Comma-separated list of node IDs to execute on")]
     nodes: Option<String>,
+}
+
+fn build_login_script(
+    defaults: &DefaultsConfig,
+    node: &NodeConfig,
+    node_password: &str,
+) -> Vec<myssh::ScriptStep> {
+    if !node.login_script.is_empty() {
+        let mut script = node.login_script.clone();
+        for step in &mut script {
+            if step.send == "{{password}}" {
+                step.send = node_password.to_string();
+            }
+        }
+        return script;
+    }
+
+    let mut script = defaults.login_script.clone();
+    for step in &mut script {
+        if step.send == "{{password}}" {
+            step.send = node_password.to_string();
+        }
+    }
+
+    let mut appended = node.login_script_append.clone();
+    script.append(&mut appended);
+
+    script
 }
 
 #[tokio::main]
@@ -46,7 +98,25 @@ async fn main() -> Result<()> {
             }
         }
 
-        let login_script = config.login_script.clone();
+        let node_password = if node.password.is_empty() {
+            config.defaults.password.clone()
+        } else {
+            node.password.clone()
+        };
+
+        let node_user = if node.user.is_empty() {
+            config.defaults.user.clone()
+        } else {
+            node.user.clone()
+        };
+
+        let node_port = if node.port == 22 && config.defaults.port != 22 {
+            config.defaults.port
+        } else {
+            node.port
+        };
+
+        let login_script = build_login_script(&config.defaults, &node, &node_password);
         let command = cli.command.clone();
 
         tasks.push(tokio::spawn(async move {
@@ -58,9 +128,9 @@ async fn main() -> Result<()> {
 
             myssh::execute_ssh(
                 node.host,
-                node.port,
-                node.user,
-                node.password,
+                node_port,
+                node_user,
+                node_password,
                 login_script,
                 commands,
             ).await
