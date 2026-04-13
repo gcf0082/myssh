@@ -59,6 +59,7 @@ fn check_wait_appeared(wait_pattern: &str, output: &str) -> bool {
 }
 
 pub async fn execute_ssh(
+    node_id: String,
     host: String,
     port: u16,
     user: String,
@@ -66,6 +67,7 @@ pub async fn execute_ssh(
     login_script: Vec<ScriptStep>,
     commands: Vec<ScriptStep>,
     verbose: bool,
+    prefix: bool,
 ) -> Result<bool> {
     if verbose {
         eprintln!("[DEBUG] Connecting to {}:{} as {}", host, port, user);
@@ -119,6 +121,7 @@ pub async fn execute_ssh(
     let mut interrupted = false;
     let mut full_buf = String::new();
     let mut output_start = 0;
+    let mut line_start = true;
 
     for s in &commands {
         if verbose {
@@ -175,13 +178,31 @@ pub async fn execute_ssh(
                                         let output = &content[..end_pos];
                                         let output_clean = output.trim();
                                         if !output_clean.is_empty() {
-                                            println!("{}", output_clean);
+                                            for line in output_clean.lines() {
+                                                if prefix {
+                                                    println!("[{}] {}", node_id, line);
+                                                } else {
+                                                    println!("{}", line);
+                                                }
+                                            }
                                         }
                                     }
                                     break;
                                 }
-                                
-                                print!("{}", content);
+
+                                if prefix {
+                                    for ch in content.chars() {
+                                        if line_start {
+                                            print!("[{}] {}", node_id, ch);
+                                            line_start = ch == '\n';
+                                        } else {
+                                            print!("{}", ch);
+                                            line_start = ch == '\n';
+                                        }
+                                    }
+                                } else {
+                                    print!("{}", content);
+                                }
                                 output_start = full_buf.len();
                             }
                         }
@@ -218,6 +239,7 @@ pub async fn execute_ssh(
 }
 
 pub async fn execute_ssh_via_jump(
+    node_id: String,
     jump_host: String,
     jump_port: u16,
     jump_user: String,
@@ -230,6 +252,7 @@ pub async fn execute_ssh_via_jump(
     target_login_script: Vec<ScriptStep>,
     commands: Vec<ScriptStep>,
     verbose: bool,
+    prefix: bool,
 ) -> Result<bool> {
     if verbose {
         eprintln!("[DEBUG] Connecting to jump host {}:{} as {}", jump_host, jump_port, jump_user);
@@ -346,6 +369,7 @@ pub async fn execute_ssh_via_jump(
 
     let mut full_buf = String::new();
     let mut output_start = 0;
+    let mut line_start = true;
 
     for s in &commands {
         if verbose {
@@ -400,13 +424,31 @@ pub async fn execute_ssh_via_jump(
                                         let output = &content[..end_pos];
                                         let output_clean = output.trim();
                                         if !output_clean.is_empty() {
-                                            println!("{}", output_clean);
+                                            for line in output_clean.lines() {
+                                                if prefix {
+                                                    println!("[{}] {}", node_id, line);
+                                                } else {
+                                                    println!("{}", line);
+                                                }
+                                            }
                                         }
                                     }
                                     break;
                                 }
 
-                                print!("{}", content);
+                                if prefix {
+                                    for ch in content.chars() {
+                                        if line_start {
+                                            print!("[{}] {}", node_id, ch);
+                                            line_start = ch == '\n';
+                                        } else {
+                                            print!("{}", ch);
+                                            line_start = ch == '\n';
+                                        }
+                                    }
+                                } else {
+                                    print!("{}", content);
+                                }
                                 output_start = full_buf.len();
                             }
                         }

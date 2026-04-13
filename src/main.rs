@@ -67,6 +67,8 @@ struct Cli {
     nodes: Option<String>,
     #[arg(short, long, help = "Show debug information")]
     verbose: bool,
+    #[arg(long, help = "Add node prefix to each output line")]
+    prefix: bool,
 }
 
 fn build_login_script(
@@ -154,6 +156,7 @@ async fn main() -> Result<()> {
 
             if use_jump {
                 myssh::execute_ssh_via_jump(
+                    node.id.clone(),
                     jump_host,
                     jump_port,
                     jump_user,
@@ -166,9 +169,11 @@ async fn main() -> Result<()> {
                     login_script,
                     commands,
                     cli.verbose,
+                    cli.prefix,
                 ).await
             } else {
                 myssh::execute_ssh(
+                    node.id.clone(),
                     node.host,
                     node_port,
                     node_user,
@@ -176,6 +181,7 @@ async fn main() -> Result<()> {
                     login_script,
                     commands,
                     cli.verbose,
+                    cli.prefix,
                 ).await
             }
         }));
