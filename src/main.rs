@@ -140,11 +140,33 @@ async fn main() -> Result<()> {
         }));
     }
 
-    for task in tasks {
-        if let Err(e) = task.await? {
-            eprintln!("Task failed: {}", e);
-        }
-    }
+    let ctrl_c = tokio::signal::ctrl_c();
+tokio::pin!(ctrl_c);
 
-    Ok(())
+let any_failed = tokio::select! {
+    _ = ctrl_c.as_mut() => {
+        eprintln!("\nCtrl+C received, aborting all tasks...");
+        for handle in tasks {
+            let _ = handle.abort();
+        }
+        true
+    }
+    result = async {
+        let mut failed = false;
+        for handle in &mut tasks {
+            match handle.await {
+                Ok(Ok(success)) if !success => failed = true,
+                Ok(Err(e)) => eprintln!("Task failed: {}", e),
+                _ => {}
+            }
+        }
+        failed
+    } => result
+};
+
+if any_failed {
+    std::process::exit(1);
+}
+
+Ok(())
 }

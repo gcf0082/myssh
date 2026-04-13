@@ -66,13 +66,13 @@ pub async fn execute_ssh(
     login_script: Vec<ScriptStep>,
     commands: Vec<ScriptStep>,
     verbose: bool,
-) -> Result<()> {
+) -> Result<bool> {
     if verbose {
         eprintln!("[DEBUG] Connecting to {}:{} as {}", host, port, user);
     }
     let total_steps = login_script.len() + commands.len();
     if total_steps == 0 {
-        return Ok(());
+        return Ok(true);
     }
 
     let ssh_config = Arc::new(russh::client::Config::default());
@@ -84,7 +84,7 @@ pub async fn execute_ssh(
     ).await?;
 
     if !session.authenticate_password(&user, &password).await? {
-        return Ok(());
+        return Ok(true);
     }
 
     let mut channel = session.channel_open_session().await?;
@@ -108,13 +108,17 @@ pub async fn execute_ssh(
                         }
                     }
                 }
-                None => return Ok(()),
+                None => return Ok(false),
             }
         }
 
         let cmd = format!("{}\n", s.send);
         channel.data(cmd.as_bytes()).await?;
     }
+
+    let mut interrupted = false;
+    let mut full_buf = String::new();
+    let mut output_start = 0;
 
     for s in &commands {
         if verbose {
@@ -133,22 +137,22 @@ pub async fn execute_ssh(
                         }
                     }
                 }
-                None => return Ok(()),
+                None => return Ok(false),
             }
         }
 
         let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
         channel.data(cmd.as_bytes()).await?;
         
-        let mut full_buf = String::new();
-        let mut output_start = 0;
-        let mut found_end_marker = false;
+        let found_end_marker = false;
+        
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
         
         loop {
             tokio::select! {
                 _ = ctrl_c.as_mut() => {
+                    interrupted = true;
                     break;
                 }
                 msg = channel.wait() => {
@@ -167,8 +171,6 @@ pub async fn execute_ssh(
                                 let content = &full_buf[output_start..];
                                 
                                 if content.contains("MY_end") {
-                                    found_end_marker = true;
-                                    
                                     if let Some(end_pos) = content.find("MY_end") {
                                         let output = &content[..end_pos];
                                         let output_clean = output.trim();
@@ -189,16 +191,30 @@ pub async fn execute_ssh(
                 }
             }
             
-            if found_end_marker {
+            if interrupted || found_end_marker {
                 break;
             }
         }
+
+        if interrupted {
+            break;
+        }
+    }
+
+    if interrupted {
+        if let Err(e) = channel.eof().await {
+            eprintln!("[DEBUG] Channel EOF error (ignored): {}", e);
+        }
+        if let Err(e) = session.disconnect(Disconnect::ByApplication, "", "").await {
+            eprintln!("[DEBUG] Disconnect error (ignored): {}", e);
+        }
+        return Ok(false);
     }
 
     let _ = channel.eof().await;
     session.disconnect(Disconnect::ByApplication, "", "").await?;
 
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
