@@ -110,6 +110,15 @@ async fn main() -> Result<()> {
         s.split(',').map(|id| id.trim().to_string()).collect()
     });
 
+    if let Some(ref ids) = target_node_ids {
+        let all_node_ids: HashSet<String> = config.nodes.iter().map(|n| n.id.clone()).collect();
+        let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
+        if !missing_ids.is_empty() {
+            eprintln!("Error: Node(s) not found: {}", missing_ids.join(", "));
+            std::process::exit(1);
+        }
+    }
+
     let mut tasks = Vec::new();
 
     for node in config.nodes {

@@ -86,7 +86,7 @@ pub async fn execute_ssh(
     ).await?;
 
     if !session.authenticate_password(&user, &password).await? {
-        return Ok(true);
+        return Err(anyhow::anyhow!("{}:{}:{} - Authentication failed: Invalid password or username", host, port, user));
     }
 
     let mut channel = session.channel_open_session().await?;
@@ -267,7 +267,7 @@ pub async fn execute_ssh_via_jump(
     ).await?;
 
     if !session.authenticate_password(&jump_user, &jump_password).await? {
-        return Ok(true);
+        return Err(anyhow::anyhow!("Jump host {}:{}:{} - Authentication failed: Invalid password or username", jump_host, jump_port, jump_user));
     }
 
     let mut channel = session.channel_open_session().await?;
