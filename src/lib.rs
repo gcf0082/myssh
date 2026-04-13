@@ -217,6 +217,231 @@ pub async fn execute_ssh(
     Ok(true)
 }
 
+pub async fn execute_ssh_via_jump(
+    jump_host: String,
+    jump_port: u16,
+    jump_user: String,
+    jump_password: String,
+    jump_login_script: Vec<ScriptStep>,
+    target_host: String,
+    target_port: u16,
+    target_user: String,
+    target_password: String,
+    target_login_script: Vec<ScriptStep>,
+    commands: Vec<ScriptStep>,
+    verbose: bool,
+) -> Result<bool> {
+    if verbose {
+        eprintln!("[DEBUG] Connecting to jump host {}:{} as {}", jump_host, jump_port, jump_user);
+    }
+
+    let ssh_config = Arc::new(russh::client::Config::default());
+
+    let mut session = russh::client::connect(
+        ssh_config,
+        (&jump_host as &str, jump_port),
+        ClientHandler,
+    ).await?;
+
+    if !session.authenticate_password(&jump_user, &jump_password).await? {
+        return Ok(true);
+    }
+
+    let mut channel = session.channel_open_session().await?;
+    channel.request_pty(true, "xterm", 80, 24, 0, 0, &[]).await?;
+    channel.request_shell(true).await?;
+
+    for s in &jump_login_script {
+        if verbose {
+            eprintln!("[DEBUG] Jump login step: {} - send: {}", s.name, s.send);
+        }
+        let mut buf = String::new();
+
+        loop {
+            match channel.wait().await {
+                Some(m) => {
+                    if let ChannelMsg::Data { ref data } = m {
+                        let txt = String::from_utf8_lossy(data);
+                        buf.push_str(&txt);
+                        if check_wait_appeared(&s.wait, &buf) {
+                            break;
+                        }
+                    }
+                }
+                None => return Ok(false),
+            }
+        }
+
+        let cmd = format!("{}\n", s.send);
+        channel.data(cmd.as_bytes()).await?;
+    }
+
+    let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no -p {} {}@{}\n", target_port, target_user, target_host);
+    if verbose {
+        eprintln!("[DEBUG] SSH command: {}", ssh_cmd.trim());
+    }
+    channel.data(ssh_cmd.as_bytes()).await?;
+
+    let mut buf = String::new();
+    let mut interrupted = false;
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
+    loop {
+        tokio::select! {
+            _ = ctrl_c.as_mut() => {
+                interrupted = true;
+                break;
+            }
+            msg = channel.wait() => {
+                if let Some(m) = msg {
+                    if let ChannelMsg::Data { ref data } = m {
+                        let txt = String::from_utf8_lossy(data);
+                        buf.push_str(&txt);
+                        if verbose {
+                            eprintln!("[DEBUG] Jump output: {:?}", txt);
+                        }
+                        if buf.contains("password:") || buf.contains("Password:") {
+                            break;
+                        }
+                    }
+                } else {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
+    if interrupted {
+        return Ok(false);
+    }
+
+    let pass_cmd = format!("{}\n", target_password);
+    channel.data(pass_cmd.as_bytes()).await?;
+
+    for s in &target_login_script {
+        if verbose {
+            eprintln!("[DEBUG] Target login step: {} - send: {}", s.name, s.send);
+        }
+        let mut buf = String::new();
+
+        loop {
+            match channel.wait().await {
+                Some(m) => {
+                    if let ChannelMsg::Data { ref data } = m {
+                        let txt = String::from_utf8_lossy(data);
+                        buf.push_str(&txt);
+                        if check_wait_appeared(&s.wait, &buf) {
+                            break;
+                        }
+                    }
+                }
+                None => return Ok(false),
+            }
+        }
+
+        let cmd = format!("{}\n", s.send);
+        channel.data(cmd.as_bytes()).await?;
+    }
+
+    let mut full_buf = String::new();
+    let mut output_start = 0;
+
+    for s in &commands {
+        if verbose {
+            eprintln!("[DEBUG] Execute command: {}", s.send);
+        }
+        let mut buf = String::new();
+
+        loop {
+            match channel.wait().await {
+                Some(m) => {
+                    if let ChannelMsg::Data { ref data } = m {
+                        let txt = String::from_utf8_lossy(data);
+                        buf.push_str(&txt);
+                        if check_wait_appeared(&s.wait, &buf) {
+                            break;
+                        }
+                    }
+                }
+                None => return Ok(false),
+            }
+        }
+
+        let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
+        channel.data(cmd.as_bytes()).await?;
+
+        let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
+
+        loop {
+            tokio::select! {
+                _ = ctrl_c.as_mut() => {
+                    interrupted = true;
+                    break;
+                }
+                msg = channel.wait() => {
+                    if let Some(m) = msg {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            full_buf.push_str(&txt);
+
+                            if let Some(begin_pos) = full_buf.find("MY_begin\r\n") {
+                                let content_start = begin_pos + 10;
+
+                                if content_start > output_start {
+                                    output_start = content_start;
+                                }
+
+                                let content = &full_buf[output_start..];
+
+                                if content.contains("MY_end") {
+                                    if let Some(end_pos) = content.find("MY_end") {
+                                        let output = &content[..end_pos];
+                                        let output_clean = output.trim();
+                                        if !output_clean.is_empty() {
+                                            println!("{}", output_clean);
+                                        }
+                                    }
+                                    break;
+                                }
+
+                                print!("{}", content);
+                                output_start = full_buf.len();
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            if interrupted {
+                break;
+            }
+        }
+
+        if interrupted {
+            break;
+        }
+    }
+
+    if interrupted {
+        if let Err(e) = channel.eof().await {
+            eprintln!("[DEBUG] Channel EOF error (ignored): {}", e);
+        }
+        if let Err(e) = session.disconnect(Disconnect::ByApplication, "", "").await {
+            eprintln!("[DEBUG] Disconnect error (ignored): {}", e);
+        }
+        return Ok(false);
+    }
+
+    let _ = channel.eof().await;
+    session.disconnect(Disconnect::ByApplication, "", "").await?;
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

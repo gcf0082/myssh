@@ -6,6 +6,8 @@ use std::collections::HashSet;
 struct Config {
     #[serde(default)]
     pub defaults: DefaultsConfig,
+    #[serde(default)]
+    pub jump: JumpConfig,
     pub nodes: Vec<NodeConfig>,
 }
 
@@ -16,6 +18,19 @@ struct DefaultsConfig {
     #[serde(default)]
     pub user: String,
     #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub login_script: Vec<myssh::ScriptStep>,
+    #[serde(default)]
+    pub use_jump: bool,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct JumpConfig {
+    pub host: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    pub user: String,
     pub password: String,
     #[serde(default)]
     pub login_script: Vec<myssh::ScriptStep>,
@@ -39,6 +54,8 @@ struct NodeConfig {
     pub login_script: Vec<myssh::ScriptStep>,
     #[serde(default)]
     pub login_script_append: Vec<myssh::ScriptStep>,
+    #[serde(default)]
+    pub use_jump: Option<bool>,
 }
 
 #[derive(Parser, Debug)]
@@ -120,6 +137,13 @@ async fn main() -> Result<()> {
 
         let login_script = build_login_script(&config.defaults, &node, &node_password);
         let command = cli.command.clone();
+        let use_jump = node.use_jump.or(Some(config.defaults.use_jump)).unwrap_or(false);
+
+        let jump_host = config.jump.host.clone();
+        let jump_port = config.jump.port;
+        let jump_user = config.jump.user.clone();
+        let jump_password = config.jump.password.clone();
+        let jump_login_script = config.jump.login_script.clone();
 
         tasks.push(tokio::spawn(async move {
             let commands = vec![myssh::ScriptStep {
@@ -128,15 +152,32 @@ async fn main() -> Result<()> {
                 send: command,
             }];
 
-            myssh::execute_ssh(
-                node.host,
-                node_port,
-                node_user,
-                node_password,
-                login_script,
-                commands,
-                cli.verbose,
-            ).await
+            if use_jump {
+                myssh::execute_ssh_via_jump(
+                    jump_host,
+                    jump_port,
+                    jump_user,
+                    jump_password,
+                    jump_login_script,
+                    node.host,
+                    node_port,
+                    node_user,
+                    node_password,
+                    login_script,
+                    commands,
+                    cli.verbose,
+                ).await
+            } else {
+                myssh::execute_ssh(
+                    node.host,
+                    node_port,
+                    node_user,
+                    node_password,
+                    login_script,
+                    commands,
+                    cli.verbose,
+                ).await
+            }
         }));
     }
 

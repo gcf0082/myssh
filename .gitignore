@@ -1,2 +1,4 @@
 target/
 config.yaml
+config.*.yaml
+*.yaml_bak
