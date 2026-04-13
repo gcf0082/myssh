@@ -48,6 +48,8 @@ struct Cli {
     command: String,
     #[arg(short, long, help = "Comma-separated list of node IDs to execute on")]
     nodes: Option<String>,
+    #[arg(short, long, help = "Show debug information")]
+    verbose: bool,
 }
 
 fn build_login_script(
@@ -133,6 +135,7 @@ async fn main() -> Result<()> {
                 node_password,
                 login_script,
                 commands,
+                cli.verbose,
             ).await
         }));
     }

@@ -65,7 +65,11 @@ pub async fn execute_ssh(
     password: String,
     login_script: Vec<ScriptStep>,
     commands: Vec<ScriptStep>,
+    verbose: bool,
 ) -> Result<()> {
+    if verbose {
+        eprintln!("[DEBUG] Connecting to {}:{} as {}", host, port, user);
+    }
     let total_steps = login_script.len() + commands.len();
     if total_steps == 0 {
         return Ok(());
@@ -88,6 +92,9 @@ pub async fn execute_ssh(
     channel.request_shell(true).await?;
 
     for s in &login_script {
+        if verbose {
+            eprintln!("[DEBUG] Login step: {} - send: {}", s.name, s.send);
+        }
         let mut buf = String::new();
 
         loop {
@@ -110,6 +117,9 @@ pub async fn execute_ssh(
     }
 
     for s in &commands {
+        if verbose {
+            eprintln!("[DEBUG] Execute command: {}", s.send);
+        }
         let mut buf = String::new();
 
         loop {
