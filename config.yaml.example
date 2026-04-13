@@ -1,8 +1,10 @@
 # ==================== 全局默认配置 ====================
 defaults:
-  # 默认 SSH 端口、用户名、密码（节点可覆盖）
+  # 默认 SSH 端口（节点可覆盖）
   port: 22
+  # 默认 SSH 用户名（节点可覆盖）
   user: "user"
+  # 默认 SSH 密码（节点可覆盖）
   password: "default_password"
   # 默认登录脚本（所有节点共用，节点可通过 login_script 字段追加或覆盖）
   login_script:
@@ -14,6 +16,9 @@ defaults:
       send: "{{password}}"   # 占位符，实际执行时用节点最终密码替换
   # 全局跳板机开关，默认为 false
   use_jump: false
+  # 执行命令后等待的提示符，用于判断命令执行完成（默认为 "$|#"）
+  # 支持使用 | 分隔多个可能的提示符
+  # command_wait: "$|#"
 
 # ==================== 跳板机配置 ====================
 jump:
@@ -30,13 +35,19 @@ jump:
 # ==================== 节点列表 ====================
 nodes:
   # 节点1：完全使用默认配置（复用脚本、密码）
-  - id: "node1"
-    host: "1.1.1.1"
+  - id: "node1"                # 节点唯一标识符，用于 --nodes 参数指定节点
+    host: "1.1.1.1"            # 节点 IP 地址或主机名
+    # port: 22                  # 可选：SSH 端口，不指定则使用 defaults.port
+    # user: "user"              # 可选：SSH 用户名，不指定则使用 defaults.user
+    # password: "..."          # 可选：SSH 密码，不指定则使用 defaults.password
+    # login_script: [...]      # 可选：完全覆盖 defaults.login_script
+    # login_script_append: [...] # 可选：在默认登录脚本后追加步骤
+    # use_jump: false           # 可选：是否通过跳板机连接，不指定则使用 defaults.use_jump
 
   # 节点2：复用默认脚本，但使用独立密码
   - id: "node2"
     host: "1.1.1.2"
-    password: "node2_specific_pass"
+    password: "node2_specific_pass"  # 覆盖默认密码
 
   # 节点3：复用默认脚本，但追加额外的脚本步骤
   - id: "node3"
