@@ -23,6 +23,8 @@ struct DefaultsConfig {
     pub login_script: Vec<myssh::ScriptStep>,
     #[serde(default)]
     pub use_jump: bool,
+    #[serde(default = "default_command_wait")]
+    pub command_wait: String,
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -38,6 +40,10 @@ struct JumpConfig {
 
 fn default_port() -> u16 {
     22
+}
+
+fn default_command_wait() -> String {
+    "$|#".to_string()
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -149,6 +155,7 @@ async fn main() -> Result<()> {
         let login_script = build_login_script(&config.defaults, &node, &node_password);
         let command = cli.command.clone();
         let use_jump = node.use_jump.or(Some(config.defaults.use_jump)).unwrap_or(false);
+        let command_wait = config.defaults.command_wait.clone();
 
         let jump_host = config.jump.host.clone();
         let jump_port = config.jump.port;
@@ -159,7 +166,7 @@ async fn main() -> Result<()> {
         tasks.push(tokio::spawn(async move {
             let commands = vec![myssh::ScriptStep {
                 name: "cli".to_string(),
-                wait: "$|#".to_string(),
+                wait: command_wait,
                 send: command,
             }];
 
