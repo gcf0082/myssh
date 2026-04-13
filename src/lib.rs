@@ -1,6 +1,7 @@
 use anyhow::Result;
 use russh::{client::Handler, Disconnect, ChannelMsg};
 use std::sync::Arc;
+use std::time::Duration;
 use async_trait::async_trait;
 use russh_keys::key::PublicKey;
 
@@ -99,18 +100,30 @@ pub async fn execute_ssh(
         }
         let mut buf = String::new();
 
-        loop {
-            match channel.wait().await {
-                Some(m) => {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        buf.push_str(&txt);
-                        if check_wait_appeared(&s.wait, &buf) {
-                            break;
+        let step_timeout = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match channel.wait().await {
+                    Some(m) => {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            buf.push_str(&txt);
+                            if check_wait_appeared(&s.wait, &buf) {
+                                return true;
+                            }
                         }
                     }
+                    None => return false,
                 }
-                None => return Ok(false),
+            }
+        });
+
+        match step_timeout.await {
+            Ok(true) => {},
+            Ok(false) => {
+                return Err(anyhow::anyhow!("{}:{}:{} - Login script step '{}' failed: Channel closed", host, port, user, s.name));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!("{}:{}:{} - Login script step '{}' failed: Timeout waiting for pattern '{}'", host, port, user, s.name, s.wait));
             }
         }
 
@@ -129,18 +142,30 @@ pub async fn execute_ssh(
         }
         let mut buf = String::new();
 
-        loop {
-            match channel.wait().await {
-                Some(m) => {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        buf.push_str(&txt);
-                        if check_wait_appeared(&s.wait, &buf) {
-                            break;
+        let wait_timeout = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match channel.wait().await {
+                    Some(m) => {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            buf.push_str(&txt);
+                            if check_wait_appeared(&s.wait, &buf) {
+                                return true;
+                            }
                         }
                     }
+                    None => return false,
                 }
-                None => return Ok(false),
+            }
+        });
+
+        match wait_timeout.await {
+            Ok(true) => {},
+            Ok(false) => {
+                return Err(anyhow::anyhow!("{}:{}:{} - Command execution failed: Channel closed", host, port, user));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!("{}:{}:{} - Command execution failed: Timeout waiting for prompt", host, port, user));
             }
         }
 
@@ -280,18 +305,30 @@ pub async fn execute_ssh_via_jump(
         }
         let mut buf = String::new();
 
-        loop {
-            match channel.wait().await {
-                Some(m) => {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        buf.push_str(&txt);
-                        if check_wait_appeared(&s.wait, &buf) {
-                            break;
+        let step_timeout = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match channel.wait().await {
+                    Some(m) => {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            buf.push_str(&txt);
+                            if check_wait_appeared(&s.wait, &buf) {
+                                return true;
+                            }
                         }
                     }
+                    None => return false,
                 }
-                None => return Ok(false),
+            }
+        });
+
+        match step_timeout.await {
+            Ok(true) => {},
+            Ok(false) => {
+                return Err(anyhow::anyhow!("Jump host {}:{}:{} - Login script step '{}' failed: Channel closed", jump_host, jump_port, jump_user, s.name));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!("Jump host {}:{}:{} - Login script step '{}' failed: Timeout waiting for pattern '{}'", jump_host, jump_port, jump_user, s.name, s.wait));
             }
         }
 
@@ -348,18 +385,30 @@ pub async fn execute_ssh_via_jump(
         }
         let mut buf = String::new();
 
-        loop {
-            match channel.wait().await {
-                Some(m) => {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        buf.push_str(&txt);
-                        if check_wait_appeared(&s.wait, &buf) {
-                            break;
+        let step_timeout = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match channel.wait().await {
+                    Some(m) => {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            buf.push_str(&txt);
+                            if check_wait_appeared(&s.wait, &buf) {
+                                return true;
+                            }
                         }
                     }
+                    None => return false,
                 }
-                None => return Ok(false),
+            }
+        });
+
+        match step_timeout.await {
+            Ok(true) => {},
+            Ok(false) => {
+                return Err(anyhow::anyhow!("Target host {}:{}:{} - Login script step '{}' failed: Channel closed", target_host, target_port, target_user, s.name));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!("Target host {}:{}:{} - Login script step '{}' failed: Timeout waiting for pattern '{}'", target_host, target_port, target_user, s.name, s.wait));
             }
         }
 
@@ -377,18 +426,30 @@ pub async fn execute_ssh_via_jump(
         }
         let mut buf = String::new();
 
-        loop {
-            match channel.wait().await {
-                Some(m) => {
-                    if let ChannelMsg::Data { ref data } = m {
-                        let txt = String::from_utf8_lossy(data);
-                        buf.push_str(&txt);
-                        if check_wait_appeared(&s.wait, &buf) {
-                            break;
+        let wait_timeout = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match channel.wait().await {
+                    Some(m) => {
+                        if let ChannelMsg::Data { ref data } = m {
+                            let txt = String::from_utf8_lossy(data);
+                            buf.push_str(&txt);
+                            if check_wait_appeared(&s.wait, &buf) {
+                                return true;
+                            }
                         }
                     }
+                    None => return false,
                 }
-                None => return Ok(false),
+            }
+        });
+
+        match wait_timeout.await {
+            Ok(true) => {},
+            Ok(false) => {
+                return Err(anyhow::anyhow!("Target host {}:{}:{} - Command execution failed: Channel closed", target_host, target_port, target_user));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!("Target host {}:{}:{} - Command execution failed: Timeout waiting for prompt", target_host, target_port, target_user));
             }
         }
 
