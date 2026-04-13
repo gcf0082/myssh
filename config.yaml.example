@@ -12,6 +12,20 @@ defaults:
     - name: "输入密码"
       wait: "Password:"
       send: "{{password}}"   # 占位符，实际执行时用节点最终密码替换
+  # 全局跳板机开关，默认为 false
+  use_jump: false
+
+# ==================== 跳板机配置 ====================
+jump:
+  host: "10.0.0.1"           # 跳板机 IP
+  port: 22
+  user: "jumphost_user"
+  password: "jump_password"
+  # 跳板机自身的登录后操作（可选）
+  login_script:
+    - name: "切换到跳板机root"
+      wait: "$"
+      send: "sudo -i"
 
 # ==================== 节点列表 ====================
 nodes:
@@ -42,3 +56,13 @@ nodes:
       - name: "sudo 密码"
         wait: "password for"
         send: "sudo_pass"
+
+  # 节点5：通过跳板机连接（内网节点）
+  - id: "node5"
+    host: "192.168.1.10"      # 内网 IP
+    use_jump: true             # 该节点走跳板机
+
+  # 节点6：不走跳板机（管理网可直连）
+  - id: "node6"
+    host: "2.2.2.2"
+    use_jump: false            # 明确指定不走跳板机
