@@ -106,7 +106,7 @@ pub async fn execute_ssh(
     prefix: bool,
 ) -> Result<bool> {
     if verbose {
-        eprintln!("[DEBUG] Connecting to {}:{} as {}", host, port, user);
+        eprintln!("[DEBUG][{}] Connecting to {}:{} as {}", node_id, host, port, user);
     }
     let total_steps = login_script.len() + commands.len();
     if total_steps == 0 {
@@ -132,7 +132,7 @@ pub async fn execute_ssh(
 
     for s in &login_script {
         if verbose {
-            eprintln!("[DEBUG] Login step: {} - send: {}", s.name, s.send);
+            eprintln!("[DEBUG][{}] Login step: {} - send: {}", node_id, s.name, s.send);
         }
         let mut buf = String::new();
 
@@ -142,6 +142,9 @@ pub async fn execute_ssh(
                     Some(m) => {
                         if let ChannelMsg::Data { ref data } = m {
                             let txt = String::from_utf8_lossy(data);
+                            if verbose {
+                                eprint!("[DEBUG][{}] Received: {}", node_id, txt);
+                            }
                             buf.push_str(&txt);
                             if check_wait_appeared(&s.wait, &buf) {
                                 return true;
@@ -159,6 +162,7 @@ pub async fn execute_ssh(
                 return Err(anyhow::anyhow!("{}:{}:{} - Login script step '{}' failed: Channel closed", host, port, user, s.name));
             }
             Err(_) => {
+                eprintln!("[DEBUG][{}] Timeout! Received output so far: {:?}", node_id, buf);
                 return Err(anyhow::anyhow!("{}:{}:{} - Login script step '{}' failed: Timeout waiting for pattern '{}'", host, port, user, s.name, s.wait));
             }
         }
@@ -174,7 +178,7 @@ pub async fn execute_ssh(
 
     for s in &commands {
         if verbose {
-            eprintln!("[DEBUG] Execute command: {}", s.send);
+            eprintln!("[DEBUG][{}] Execute command: {}", node_id, s.send);
         }
         let mut buf = String::new();
 
@@ -184,6 +188,9 @@ pub async fn execute_ssh(
                     Some(m) => {
                         if let ChannelMsg::Data { ref data } = m {
                             let txt = String::from_utf8_lossy(data);
+                            if verbose {
+                                eprint!("[DEBUG][{}] Received: {}", node_id, txt);
+                            }
                             buf.push_str(&txt);
                             if check_wait_appeared(&s.wait, &buf) {
                                 return true;
@@ -201,6 +208,7 @@ pub async fn execute_ssh(
                 return Err(anyhow::anyhow!("{}:{}:{} - Command execution failed: Channel closed", host, port, user));
             }
             Err(_) => {
+                eprintln!("[DEBUG][{}] Timeout waiting for prompt! Received output so far: {:?}", node_id, buf);
                 return Err(anyhow::anyhow!("{}:{}:{} - Command execution failed: Timeout waiting for prompt", host, port, user));
             }
         }
@@ -317,7 +325,7 @@ pub async fn execute_ssh_via_jump(
     prefix: bool,
 ) -> Result<bool> {
     if verbose {
-        eprintln!("[DEBUG] Connecting to jump host {}:{} as {}", jump_host, jump_port, jump_user);
+        eprintln!("[DEBUG][{}] Connecting to jump host {}:{} as {}", node_id, jump_host, jump_port, jump_user);
     }
 
     let ssh_config = Arc::new(russh::client::Config::default());
@@ -339,7 +347,7 @@ pub async fn execute_ssh_via_jump(
 
     for s in &jump_login_script {
         if verbose {
-            eprintln!("[DEBUG] Jump login step: {} - send: {}", s.name, s.send);
+            eprintln!("[DEBUG][{}] Jump login step: {} - send: {}", node_id, s.name, s.send);
         }
         let mut buf = String::new();
 
@@ -349,6 +357,9 @@ pub async fn execute_ssh_via_jump(
                     Some(m) => {
                         if let ChannelMsg::Data { ref data } = m {
                             let txt = String::from_utf8_lossy(data);
+                            if verbose {
+                                eprint!("[DEBUG][{}] Jump received: {}", node_id, txt);
+                            }
                             buf.push_str(&txt);
                             if check_wait_appeared(&s.wait, &buf) {
                                 return true;
@@ -366,6 +377,7 @@ pub async fn execute_ssh_via_jump(
                 return Err(anyhow::anyhow!("Jump host {}:{}:{} - Login script step '{}' failed: Channel closed", jump_host, jump_port, jump_user, s.name));
             }
             Err(_) => {
+                eprintln!("[DEBUG][{}] Jump host timeout! Received output so far: {:?}", node_id, buf);
                 return Err(anyhow::anyhow!("Jump host {}:{}:{} - Login script step '{}' failed: Timeout waiting for pattern '{}'", jump_host, jump_port, jump_user, s.name, s.wait));
             }
         }
@@ -376,7 +388,7 @@ pub async fn execute_ssh_via_jump(
 
     let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no -p {} {}@{}\n", target_port, target_user, target_host);
     if verbose {
-        eprintln!("[DEBUG] SSH command: {}", ssh_cmd.trim());
+        eprintln!("[DEBUG][{}] SSH command: {}", node_id, ssh_cmd.trim());
     }
     channel.data(ssh_cmd.as_bytes()).await?;
 
@@ -397,7 +409,7 @@ pub async fn execute_ssh_via_jump(
                         let txt = String::from_utf8_lossy(data);
                         buf.push_str(&txt);
                         if verbose {
-                            eprintln!("[DEBUG] Jump output: {:?}", txt);
+                            eprintln!("[DEBUG][{}] Jump output: {:?}", node_id, txt);
                         }
                         if buf.contains("password:") || buf.contains("Password:") {
                             break;
@@ -419,7 +431,7 @@ pub async fn execute_ssh_via_jump(
 
     for s in &target_login_script {
         if verbose {
-            eprintln!("[DEBUG] Target login step: {} - send: {}", s.name, s.send);
+            eprintln!("[DEBUG][{}] Target login step: {} - send: {}", node_id, s.name, s.send);
         }
         let mut buf = String::new();
 
@@ -429,6 +441,9 @@ pub async fn execute_ssh_via_jump(
                     Some(m) => {
                         if let ChannelMsg::Data { ref data } = m {
                             let txt = String::from_utf8_lossy(data);
+                            if verbose {
+                                eprint!("[DEBUG][{}] Target received: {}", node_id, txt);
+                            }
                             buf.push_str(&txt);
                             if check_wait_appeared(&s.wait, &buf) {
                                 return true;
@@ -446,6 +461,7 @@ pub async fn execute_ssh_via_jump(
                 return Err(anyhow::anyhow!("Target host {}:{}:{} - Login script step '{}' failed: Channel closed", target_host, target_port, target_user, s.name));
             }
             Err(_) => {
+                eprintln!("[DEBUG][{}] Target host timeout! Received output so far: {:?}", node_id, buf);
                 return Err(anyhow::anyhow!("Target host {}:{}:{} - Login script step '{}' failed: Timeout waiting for pattern '{}'", target_host, target_port, target_user, s.name, s.wait));
             }
         }
@@ -460,7 +476,7 @@ pub async fn execute_ssh_via_jump(
 
     for s in &commands {
         if verbose {
-            eprintln!("[DEBUG] Execute command: {}", s.send);
+            eprintln!("[DEBUG][{}] Execute command: {}", node_id, s.send);
         }
         let mut buf = String::new();
 
@@ -470,6 +486,9 @@ pub async fn execute_ssh_via_jump(
                     Some(m) => {
                         if let ChannelMsg::Data { ref data } = m {
                             let txt = String::from_utf8_lossy(data);
+                            if verbose {
+                                eprint!("[DEBUG][{}] Target received: {}", node_id, txt);
+                            }
                             buf.push_str(&txt);
                             if check_wait_appeared(&s.wait, &buf) {
                                 return true;
@@ -487,6 +506,7 @@ pub async fn execute_ssh_via_jump(
                 return Err(anyhow::anyhow!("Target host {}:{}:{} - Command execution failed: Channel closed", target_host, target_port, target_user));
             }
             Err(_) => {
+                eprintln!("[DEBUG][{}] Target host timeout waiting for prompt! Received output so far: {:?}", node_id, buf);
                 return Err(anyhow::anyhow!("Target host {}:{}:{} - Command execution failed: Timeout waiting for prompt", target_host, target_port, target_user));
             }
         }
