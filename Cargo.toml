@@ -15,6 +15,7 @@ regex-lite = "0.1"
 clap = { version = "4", features = ["derive"] }
 rustyline = "14"
 base64 = "0.22"
+lazy_static = "1.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

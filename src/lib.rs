@@ -1,10 +1,74 @@
 use anyhow::Result;
 use russh::{client::Handler, Disconnect, ChannelMsg};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use async_trait::async_trait;
 use russh_keys::key::PublicKey;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use std::io::{Write, stdout};
+
+lazy_static::lazy_static! {
+    static ref STDOUT_LOCK: Mutex<()> = Mutex::new(());
+}
+
+fn safe_print_line(line: &str) {
+    let _guard = STDOUT_LOCK.lock().unwrap();
+    let _ = stdout().write_all(line.as_bytes());
+    let _ = stdout().write_all(b"\n");
+    let _ = stdout().flush();
+}
+
+struct LineBuffer {
+    prefix: String,
+    buffer: String,
+}
+
+impl LineBuffer {
+    fn new(node_id: &str) -> Self {
+        LineBuffer {
+            prefix: format!("[{}]", node_id),
+            buffer: String::new(),
+        }
+    }
+
+    fn feed(&mut self, data: &str, with_prefix: bool) {
+        self.buffer.push_str(data);
+
+        while let Some(pos) = self.buffer.find('\n') {
+            let line = &self.buffer[..pos];
+            let _guard = STDOUT_LOCK.lock().unwrap();
+            let mut stdout = stdout();
+
+            if with_prefix {
+                let _ = stdout.write_all(self.prefix.as_bytes());
+                let _ = stdout.write_all(b" ");
+            }
+            let _ = stdout.write_all(line.as_bytes());
+            let _ = stdout.write_all(b"\n");
+            let _ = stdout.flush();
+
+            self.buffer = self.buffer[pos + 1..].to_string();
+        }
+    }
+
+    fn flush(&mut self, with_prefix: bool) {
+        if !self.buffer.is_empty().clone() {
+            let _guard = STDOUT_LOCK.lock().unwrap();
+            let mut stdout = stdout();
+
+            if with_prefix {
+                let _ = stdout.write_all(self.prefix.as_bytes());
+                let _ = stdout.write_all(b" ");
+            }
+            let _ = stdout.write_all(self.buffer.as_bytes());
+            let _ = stdout.write_all(b"\n");
+            let _ = stdout.flush();
+
+            self.buffer.clear();
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct TerminalSize {
@@ -174,7 +238,6 @@ pub async fn execute_ssh(
     let mut interrupted = false;
     let mut full_buf = String::new();
     let mut output_start = 0;
-    let mut line_start = true;
 
     for s in &commands {
         if verbose {
@@ -216,12 +279,11 @@ pub async fn execute_ssh(
         let encoded_cmd = encode_base64_command(&s.send);
         let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -i;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
-        
-        let found_end_marker = false;
-        
+
+        let mut line_buffer = LineBuffer::new(&node_id);
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
-        
+
         loop {
             tokio::select! {
                 _ = ctrl_c.as_mut() => {
@@ -233,46 +295,30 @@ pub async fn execute_ssh(
                         if let ChannelMsg::Data { ref data } = m {
                             let txt = String::from_utf8_lossy(data);
                             full_buf.push_str(&txt);
-                            
+
                             if let Some(begin_pos) = full_buf.find("MY_begin\r\n") {
                                 let content_start = begin_pos + 10;
-                                
+
                                 if content_start > output_start {
                                     output_start = content_start;
                                 }
-                                
+
                                 let content = &full_buf[output_start..];
-                                
+
                                 if content.contains("MY_end") {
                                     if let Some(end_pos) = content.find("MY_end") {
                                         let output = &content[..end_pos];
                                         let output_clean = output.trim();
                                         if !output_clean.is_empty() {
                                             for line in output_clean.lines() {
-                                                if prefix {
-                                                    println!("[{}] {}", node_id, line);
-                                                } else {
-                                                    println!("{}", line);
-                                                }
+                                                safe_print_line(&format!("[{}] {}", node_id, line));
                                             }
                                         }
                                     }
                                     break;
                                 }
 
-                                if prefix {
-                                    for ch in content.chars() {
-                                        if line_start {
-                                            print!("[{}] {}", node_id, ch);
-                                            line_start = ch == '\n';
-                                        } else {
-                                            print!("{}", ch);
-                                            line_start = ch == '\n';
-                                        }
-                                    }
-                                } else {
-                                    print!("{}", content);
-                                }
+                                line_buffer.feed(content, prefix);
                                 output_start = full_buf.len();
                             }
                         }
@@ -281,11 +327,13 @@ pub async fn execute_ssh(
                     }
                 }
             }
-            
-            if interrupted || found_end_marker {
+
+            if interrupted {
                 break;
             }
         }
+
+        line_buffer.flush(prefix);
 
         if interrupted {
             break;
@@ -472,7 +520,6 @@ pub async fn execute_ssh_via_jump(
 
     let mut full_buf = String::new();
     let mut output_start = 0;
-    let mut line_start = true;
 
     for s in &commands {
         if verbose {
@@ -515,6 +562,7 @@ pub async fn execute_ssh_via_jump(
         let cmd = format!("echo MY_begin;echo {} | base64 -d | bash;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
 
+        let mut line_buffer = LineBuffer::new(&node_id);
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
 
@@ -545,30 +593,14 @@ pub async fn execute_ssh_via_jump(
                                         let output_clean = output.trim();
                                         if !output_clean.is_empty() {
                                             for line in output_clean.lines() {
-                                                if prefix {
-                                                    println!("[{}] {}", node_id, line);
-                                                } else {
-                                                    println!("{}", line);
-                                                }
+                                                safe_print_line(&format!("[{}] {}", node_id, line));
                                             }
                                         }
                                     }
                                     break;
                                 }
 
-                                if prefix {
-                                    for ch in content.chars() {
-                                        if line_start {
-                                            print!("[{}] {}", node_id, ch);
-                                            line_start = ch == '\n';
-                                        } else {
-                                            print!("{}", ch);
-                                            line_start = ch == '\n';
-                                        }
-                                    }
-                                } else {
-                                    print!("{}", content);
-                                }
+                                line_buffer.feed(content, prefix);
                                 output_start = full_buf.len();
                             }
                         }
@@ -582,6 +614,8 @@ pub async fn execute_ssh_via_jump(
                 break;
             }
         }
+
+        line_buffer.flush(prefix);
 
         if interrupted {
             break;

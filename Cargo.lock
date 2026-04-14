@@ -984,6 +984,7 @@ dependencies = [
  "async-trait",
  "base64",
  "clap",
+ "lazy_static",
  "libc",
  "regex-lite",
  "russh",
