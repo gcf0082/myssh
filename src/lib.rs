@@ -175,7 +175,7 @@ pub async fn execute_ssh(
         }
 
         let encoded_cmd = encode_base64_command(&s.send);
-        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash;echo MY_end\n", encoded_cmd);
+        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -i;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
         
         let found_end_marker = false;
