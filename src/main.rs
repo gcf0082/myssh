@@ -346,8 +346,15 @@ fn handle_special_command(
             }
         }
         "cd" => {
-            session.current_dir = Some(args.to_string());
-            println!("Working directory: {}", args);
+            let new_dir = if args.starts_with('/') {
+                args.to_string()
+            } else if let Some(ref dir) = session.current_dir {
+                format!("{}/{}", dir, args)
+            } else {
+                format!("/{}", args)
+            };
+            session.current_dir = Some(new_dir.clone());
+            println!("Working directory: {}", new_dir);
         }
         "pwd" => {
             if let Some(ref dir) = session.current_dir {
