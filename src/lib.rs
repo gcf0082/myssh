@@ -307,7 +307,7 @@ pub async fn execute_ssh(
 
         // 发送base64编码的命令，使用标记符包裹输出
         let encoded_cmd = encode_base64_command(&s.send);
-        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -i;echo MY_end\n", encoded_cmd);
+        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -s;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
 
         // 创建行缓冲器
@@ -606,7 +606,7 @@ pub async fn execute_ssh_via_jump(
 
         // 发送base64编码的命令
         let encoded_cmd = encode_base64_command(&s.send);
-        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -i;echo MY_end\n", encoded_cmd);
+        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -s;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
 
         let mut line_buffer = LineBuffer::new(&node_id);
