@@ -16,6 +16,7 @@ fn get_default_terminal_size() -> TerminalSize {
     TerminalSize { cols: 200, rows: 60 }
 }
 
+#[cfg(unix)]
 fn get_terminal_size() -> TerminalSize {
     unsafe {
         let mut winsize: libc::winsize = std::mem::zeroed();
@@ -28,6 +29,11 @@ fn get_terminal_size() -> TerminalSize {
             get_default_terminal_size()
         }
     }
+}
+
+#[cfg(windows)]
+fn get_terminal_size() -> TerminalSize {
+    get_default_terminal_size()
 }
 
 #[derive(Debug, serde::Deserialize)]
