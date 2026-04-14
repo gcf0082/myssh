@@ -75,7 +75,7 @@ struct Cli {
     verbose: bool,
     #[arg(long, help = "Add node prefix to each output line")]
     prefix: bool,
-    #[arg(long, default_value = "false", help = "Interactive mode (keep connection open for multiple commands)")]
+    #[arg(short, long, default_value = "false", help = "Interactive mode (keep connection open for multiple commands)")]
     interactive: bool,
 }
 

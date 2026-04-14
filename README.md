@@ -32,7 +32,7 @@ cargo run -- -c "hostname" --prefix
 cargo run -- -c "uptime" --verbose
 
 # 交互式模式（类 bash 循环输入）
-cargo run -- --interactive
+cargo run -- -i
 # 在交互式模式下，可以连续输入命令：
 # myssh> ls -la
 # myssh> pwd
