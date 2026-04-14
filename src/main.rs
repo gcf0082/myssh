@@ -3,7 +3,7 @@ use clap::Parser;
 use std::collections::HashSet;
 
 #[derive(Debug, serde::Deserialize)]
-struct Config {
+struct SshverConfig {
     #[serde(default)]
     pub defaults: DefaultsConfig,
     #[serde(default)]
@@ -79,6 +79,13 @@ struct Cli {
     interactive: bool,
 }
 
+struct InteractiveSession {
+    cli: Cli,
+    ssh_config: SshverConfig,
+    target_node_ids: Option<HashSet<String>>,
+    current_dir: Option<String>,
+}
+
 fn build_login_script(
     defaults: &DefaultsConfig,
     node: &NodeConfig,
@@ -109,13 +116,14 @@ fn build_login_script(
 
 async fn execute_on_all_nodes(
     cli: &Cli,
-    config: &Config,
+    ssh_config: &SshverConfig,
     command: &str,
     target_node_ids: &Option<HashSet<String>>,
+    current_dir: &Option<String>,
 ) -> Result<bool> {
     let mut tasks = Vec::new();
 
-    for node in &config.nodes {
+    for node in &ssh_config.nodes {
         if let Some(ref ids) = target_node_ids {
             if !ids.contains(&node.id) {
                 continue;
@@ -123,32 +131,32 @@ async fn execute_on_all_nodes(
         }
 
         let node_password = if node.password.is_empty() {
-            config.defaults.password.clone()
+            ssh_config.defaults.password.clone()
         } else {
             node.password.clone()
         };
 
         let node_user = if node.user.is_empty() {
-            config.defaults.user.clone()
+            ssh_config.defaults.user.clone()
         } else {
             node.user.clone()
         };
 
-        let node_port = if node.port == 22 && config.defaults.port != 22 {
-            config.defaults.port
+        let node_port = if node.port == 22 && ssh_config.defaults.port != 22 {
+            ssh_config.defaults.port
         } else {
             node.port
         };
 
-        let login_script = build_login_script(&config.defaults, node, &node_password);
-        let use_jump = node.use_jump.or(Some(config.defaults.use_jump)).unwrap_or(false);
-        let command_wait = config.defaults.command_wait.clone();
+        let login_script = build_login_script(&ssh_config.defaults, node, &node_password);
+        let use_jump = node.use_jump.or(Some(ssh_config.defaults.use_jump)).unwrap_or(false);
+        let command_wait = ssh_config.defaults.command_wait.clone();
 
-        let jump_host = config.jump.host.clone();
-        let jump_port = config.jump.port;
-        let jump_user = config.jump.user.clone();
-        let jump_password = config.jump.password.clone();
-        let jump_login_script = config.jump.login_script.clone();
+        let jump_host = ssh_config.jump.host.clone();
+        let jump_port = ssh_config.jump.port;
+        let jump_user = ssh_config.jump.user.clone();
+        let jump_password = ssh_config.jump.password.clone();
+        let jump_login_script = ssh_config.jump.login_script.clone();
 
         let node_id = node.id.clone();
         let node_host = node.host.clone();
@@ -156,17 +164,24 @@ async fn execute_on_all_nodes(
 
         let verbose = cli.verbose;
         let prefix = cli.prefix;
+        let current_dir = current_dir.clone();
 
         tasks.push(tokio::spawn(async move {
+            let actual_command = if let Some(ref dir) = current_dir {
+                format!("cd {} && {}", dir, command)
+            } else {
+                command
+            };
+
             let commands = vec![myssh::ScriptStep {
                 name: "cli".to_string(),
                 wait: command_wait,
-                send: command,
+                send: actual_command,
             }];
 
             if use_jump {
                 myssh::execute_ssh_via_jump(
-            node_id,
+                    node_id,
                     jump_host,
                     jump_port,
                     jump_user,
@@ -213,7 +228,7 @@ async fn execute_on_all_nodes(
             for handle in &mut tasks {
                 match handle.await {
                     Ok(Ok(success)) if !success => failed = true,
-                    Ok(Err(e)) => eprintln!("Task failed: {}", e),
+                    Ok(Err(e)) => eprintln!("\nTask failed: {}", e),
                     _ => {}
                 }
             }
@@ -224,17 +239,111 @@ async fn execute_on_all_nodes(
     Ok(any_failed)
 }
 
-async fn run_interactive_session(cli: Cli, config: Config) -> Result<()> {
+fn parse_special_command(line: &str) -> Option<(&str, &str)> {
+    if line.starts_with("!!") {
+        let rest = line[2..].trim_start();
+        if let Some(idx) = rest.find(' ') {
+            Some((&rest[..idx], rest[idx + 1..].trim()))
+        } else if rest.is_empty() {
+            None
+        } else {
+            Some((rest, ""))
+        }
+    } else {
+        None
+    }
+}
+
+fn get_node_names(ssh_config: &SshverConfig, target_node_ids: &Option<HashSet<String>>) -> String {
+    if let Some(ref ids) = target_node_ids {
+        let mut names: Vec<_> = ssh_config.nodes
+            .iter()
+            .filter(|n| ids.contains(&n.id))
+            .map(|n| n.id.clone())
+            .collect();
+        names.sort();
+        names.join(",")
+    } else {
+        "all".to_string()
+    }
+}
+
+fn handle_special_command(
+    session: &mut InteractiveSession,
+    cmd: &str,
+    args: &str,
+) -> Result<bool> {
+    match cmd {
+        "help" => {
+            println!("Special commands (!! prefix):");
+            println!("  !!help              - Show this help");
+            println!("  !!nodes <list|all> - Set target nodes (e.g., !!nodes node1,node2)");
+            println!("  !!cd <path>         - Change working directory");
+            println!("  !!pwd                - Show current working directory");
+        }
+        "nodes" => {
+            if args == "all" || args.is_empty() {
+                session.target_node_ids = None;
+                println!("Target nodes: all");
+            } else {
+                let new_ids: HashSet<String> = args.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let all_node_ids: HashSet<String> = session.ssh_config.nodes
+                    .iter()
+                    .map(|n| n.id.clone())
+                    .collect();
+
+                let missing: Vec<_> = new_ids.iter()
+                    .filter(|id| !all_node_ids.contains(*id))
+                    .map(|s| s.to_string())
+                    .collect();
+
+                if !missing.is_empty() {
+                    eprintln!("Error: Node(s) not found: {}", missing.join(", "));
+                    return Ok(false);
+                }
+
+                session.target_node_ids = Some(new_ids);
+                println!("Target nodes: {}", args);
+            }
+        }
+        "cd" => {
+            session.current_dir = Some(args.to_string());
+            println!("Working directory: {}", args);
+        }
+        "pwd" => {
+            if let Some(ref dir) = session.current_dir {
+                println!("Current working directory: {}", dir);
+            } else {
+                println!("Current working directory: (not set)");
+            }
+        }
+        _ => {
+            eprintln!("Unknown command: !!{}", cmd);
+            eprintln!("Type '!!help' for available commands");
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn run_interactive_session() -> Result<()> {
     use rustyline::error::ReadlineError;
     use rustyline::history::MemHistory;
-    use rustyline::Config;
+
+    let cli = Cli::parse();
+    let config_str = std::fs::read_to_string("config.yaml")?;
+    let ssh_config: SshverConfig = serde_yaml::from_str(&config_str)?;
 
     let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
         s.split(',').map(|id| id.trim().to_string()).collect()
     });
 
     if let Some(ref ids) = target_node_ids {
-        let all_node_ids: HashSet<String> = config.nodes.iter().map(|n| n.id.clone()).collect();
+        let all_node_ids: HashSet<String> = ssh_config.nodes.iter().map(|n| n.id.clone()).collect();
         let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
         if !missing_ids.is_empty() {
             eprintln!("Error: Node(s) not found: {}", missing_ids.join(", "));
@@ -242,20 +351,31 @@ async fn run_interactive_session(cli: Cli, config: Config) -> Result<()> {
         }
     }
 
-    let node_count = if let Some(ref ids) = target_node_ids {
-        config.nodes.iter().filter(|n| ids.contains(&n.id)).count()
-    } else {
-        config.nodes.len()
+    let mut session = InteractiveSession {
+        cli,
+        ssh_config,
+        target_node_ids,
+        current_dir: None,
     };
 
-    println!("Interactive mode. Type 'exit' or 'quit' to leave.");
-    println!("Connected to {} node(s).", node_count);
+    let node_names = get_node_names(&session.ssh_config, &session.target_node_ids);
+    println!("Interactive mode. Type 'exit' or 'quit' to leave, '!!help' for commands.");
+    println!("Connected to {} node(s).", node_names);
 
     let h = MemHistory::new();
-    let mut editor = rustyline::Editor::<(), MemHistory>::with_history(Config::default(), h)?;
+    let mut editor = rustyline::Editor::<(), MemHistory>::with_history(rustyline::Config::default(), h)?;
 
     loop {
-        let readline: rustyline::Result<String> = editor.readline("myssh> ");
+        let node_names = get_node_names(&session.ssh_config, &session.target_node_ids);
+        let dir_info = session.current_dir.as_ref().map_or(String::new(), |d| format!("{}", d));
+
+        let prompt = if dir_info.is_empty() {
+            format!("myssh[{}]> ", node_names)
+        } else {
+            format!("myssh[{}]{}> ", node_names, dir_info)
+        };
+
+        let readline: rustyline::Result<String> = editor.readline(&prompt);
 
         match readline {
             Ok(line) => {
@@ -270,9 +390,19 @@ async fn run_interactive_session(cli: Cli, config: Config) -> Result<()> {
 
                 editor.add_history_entry(line.as_str())?;
 
-                let failed = execute_on_all_nodes(&cli, &config, &line, &target_node_ids).await?;
-                if failed {
-                    eprintln!("Some commands failed.");
+                if let Some((cmd, args)) = parse_special_command(trimmed) {
+                    handle_special_command(&mut session, cmd, args)?;
+                } else {
+                    let failed = execute_on_all_nodes(
+                        &session.cli,
+                        &session.ssh_config,
+                        trimmed,
+                        &session.target_node_ids,
+                        &session.current_dir,
+                    ).await?;
+                    if failed {
+                        eprintln!("\nSome commands failed.");
+                    }
                 }
             }
             Err(ReadlineError::Eof) => {
@@ -298,10 +428,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let config_str = std::fs::read_to_string("config.yaml")?;
-    let config: Config = serde_yaml::from_str(&config_str)?;
+    let config: SshverConfig = serde_yaml::from_str(&config_str)?;
 
     if cli.interactive {
-        run_interactive_session(cli, config).await?;
+        run_interactive_session().await?;
     } else {
         let command = cli.command.as_ref().ok_or_else(|| anyhow::anyhow!("--command is required in non-interactive mode"))?;
 
@@ -318,7 +448,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        let any_failed = execute_on_all_nodes(&cli, &config, command, &target_node_ids).await?;
+        let any_failed = execute_on_all_nodes(&cli, &config, command, &target_node_ids, &None).await?;
 
         if any_failed {
             std::process::exit(1);
