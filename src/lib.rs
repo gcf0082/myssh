@@ -386,7 +386,7 @@ pub async fn execute_ssh_via_jump(
         channel.data(cmd.as_bytes()).await?;
     }
 
-    let ssh_cmd = format!("ssh -o StrictHostKeyChecking=no -p {} {}@{}\n", target_port, target_user, target_host);
+    let ssh_cmd = format!("ssh -t -o StrictHostKeyChecking=no -p {} {}@{}\n", target_port, target_user, target_host);
     if verbose {
         eprintln!("[DEBUG][{}] SSH command: {}", node_id, ssh_cmd.trim());
     }
