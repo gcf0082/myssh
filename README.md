@@ -30,16 +30,27 @@ cargo run -- -c "hostname" --prefix
 
 # 显示调试信息
 cargo run -- -c "uptime" --verbose
+
+# 交互式模式（类 bash 循环输入）
+cargo run -- --interactive
+# 在交互式模式下，可以连续输入命令：
+# myssh> ls -la
+# myssh> pwd
+# myssh> hostname
+# myssh> exit  # 或 quit，或按 Ctrl+D 退出
 ```
 
 ## 命令行参数
 
 | 参数 | 简写 | 说明 | 必填 |
 |------|------|------|------|
-| `--command` | `-c` | 要执行的命令 | 是 |
+| `--command` | `-c` | 要执行的命令（非交互式模式必填） | 否* |
 | `--nodes` | `-n` | 逗号分隔的节点 ID 列表（不指定则所有节点） | 否 |
 | `--prefix` | | 在每行输出前添加节点前缀 `[node_id]` | 否 |
 | `--verbose` | `-v` | 显示调试信息 | 否 |
+| `--interactive` | | 交互式模式（循环接收命令输入，类似 bash） | 否 |
+
+*注：在非交互式模式下，`--command` 为必填参数。在交互式模式下，不需要指定 `--command`。
 
 ## 配置文件
 
