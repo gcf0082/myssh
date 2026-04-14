@@ -238,10 +238,9 @@ async fn execute_on_all_nodes(
 
     Ok(any_failed)
 }
-
 fn parse_special_command(line: &str) -> Option<(&str, &str)> {
-    if line.starts_with("!!") {
-        let rest = line[2..].trim_start();
+    if let Some(pos) = line.find("!!") {
+        let rest = line[pos + 2..].trim_start();
         if let Some(idx) = rest.find(' ') {
             Some((&rest[..idx], rest[idx + 1..].trim()))
         } else if rest.is_empty() {
