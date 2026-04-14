@@ -277,37 +277,73 @@ fn handle_special_command(
         "help" => {
             println!("Special commands (!! prefix):");
             println!("  !!help              - Show this help");
-            println!("  !!nodes <list|all> - Set target nodes (e.g., !!nodes node1,node2)");
+            println!("  !!node <subcmd>     - Node management commands");
+            println!("      set <list|all> - Set target nodes (e.g., !!node set node1,node2)");
+            println!("      list            - List all node IDs");
+            println!("      list -v         - List all nodes with details");
             println!("  !!cd <path>         - Change working directory");
             println!("  !!pwd                - Show current working directory");
         }
-        "nodes" => {
-            if args == "all" || args.is_empty() {
-                session.target_node_ids = None;
-                println!("Target nodes: all");
-            } else {
-                let new_ids: HashSet<String> = args.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+        "node" => {
+            let parts: Vec<&str> = args.split_whitespace().collect();
+            if parts.is_empty() {
+                eprintln!("Error: Missing subcommand. Use '!!node help' for usage.");
+                return Ok(false);
+            }
 
-                let all_node_ids: HashSet<String> = session.ssh_config.nodes
-                    .iter()
-                    .map(|n| n.id.clone())
-                    .collect();
+            let subcmd = parts[0];
+            let subargs = if parts.len() > 1 { &parts[1..] } else { &[] as &[&str] };
 
-                let missing: Vec<_> = new_ids.iter()
-                    .filter(|id| !all_node_ids.contains(*id))
-                    .map(|s| s.to_string())
-                    .collect();
+            match subcmd {
+                "set" => {
+                    if subargs.is_empty() {
+                        session.target_node_ids = None;
+                        println!("Target nodes: all");
+                    } else {
+                        let nodes_str = subargs.join(" ");
+                        let new_ids: HashSet<String> = nodes_str.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
 
-                if !missing.is_empty() {
-                    eprintln!("Error: Node(s) not found: {}", missing.join(", "));
-                    return Ok(false);
+                        let all_node_ids: HashSet<String> = session.ssh_config.nodes
+                            .iter()
+                            .map(|n| n.id.clone())
+                            .collect();
+
+                        let missing: Vec<_> = new_ids.iter()
+                            .filter(|id| !all_node_ids.contains(*id))
+                            .map(|s| s.to_string())
+                            .collect();
+
+                        if !missing.is_empty() {
+                            eprintln!("Error: Node(s) not found: {}", missing.join(", "));
+                            return Ok(false);
+                        }
+
+                        session.target_node_ids = Some(new_ids);
+                        println!("Target nodes: {}", nodes_str);
+                    }
                 }
-
-                session.target_node_ids = Some(new_ids);
-                println!("Target nodes: {}", args);
+                "list" => {
+                    let verbose = subargs.iter().any(|&s| s == "-v");
+                    if verbose {
+                        println!("Node details:");
+                        for node in &session.ssh_config.nodes {
+                            println!("  {} - {}", node.id, node.host);
+                        }
+                    } else {
+                        let mut node_ids: Vec<_> = session.ssh_config.nodes.iter().map(|n| n.id.clone()).collect();
+                        node_ids.sort();
+                        println!("Available nodes: {}", node_ids.join(", "));
+                    }
+                }
+                "help" | _ => {
+                    println!("Node management commands:");
+                    println!("  !!node set <list|all> - Set target nodes");
+                    println!("  !!node list            - List all node IDs");
+                    println!("  !!node list -v         - List all nodes with details");
+                }
             }
         }
         "cd" => {

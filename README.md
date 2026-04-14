@@ -47,7 +47,9 @@ cargo run -- -i
 | 命令 | 功能 | 示例 |
 |------|------|------|
 | `!!help` | 显示所有控制命令帮助 | `!!help` |
-| `!!nodes <list>` | 设置目标节点列表 | `!!nodes node1,node2`<br>`!!nodes all` |
+| `!!node set <list>` | 设置目标节点列表 | `!!node set node1,node2`<br>`!!node set all` |
+| `!!node list` | 列出所有节点 ID | `!!node list` |
+| `!!node list -v` | 列出所有节点详细信息 | `!!node list -v`` |
 | `!!cd <path>` | 设置工作目录 | `!!cd /var/log`<br>`!!cd ~` |
 | `!!pwd` | 显示当前工作目录 | `!!pwd` |
 
