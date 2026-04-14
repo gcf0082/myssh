@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use async_trait::async_trait;
 use russh_keys::key::PublicKey;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct Config {
@@ -57,6 +58,10 @@ fn check_wait_appeared(wait_pattern: &str, output: &str) -> bool {
         }
     }
     false
+}
+
+fn encode_base64_command(command: &str) -> String {
+    STANDARD.encode(command)
 }
 
 pub async fn execute_ssh(
@@ -169,7 +174,8 @@ pub async fn execute_ssh(
             }
         }
 
-        let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
+        let encoded_cmd = encode_base64_command(&s.send);
+        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
         
         let found_end_marker = false;
@@ -453,7 +459,8 @@ pub async fn execute_ssh_via_jump(
             }
         }
 
-        let cmd = format!("echo MY_begin && {} && echo MY_end\n", s.send);
+        let encoded_cmd = encode_base64_command(&s.send);
+        let cmd = format!("echo MY_begin;echo {} | base64 -d | bash;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
 
         let ctrl_c = tokio::signal::ctrl_c();
