@@ -6,6 +6,30 @@ use async_trait::async_trait;
 use russh_keys::key::PublicKey;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+#[derive(Clone, Copy)]
+struct TerminalSize {
+    cols: u32,
+    rows: u32,
+}
+
+fn get_default_terminal_size() -> TerminalSize {
+    TerminalSize { cols: 200, rows: 60 }
+}
+
+fn get_terminal_size() -> TerminalSize {
+    unsafe {
+        let mut winsize: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut winsize) == 0 {
+            TerminalSize {
+                cols: winsize.ws_col as u32,
+                rows: winsize.ws_row as u32,
+            }
+        } else {
+            get_default_terminal_size()
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct Config {
     pub ssh: SshConfig,
@@ -96,7 +120,8 @@ pub async fn execute_ssh(
     }
 
     let mut channel = session.channel_open_session().await?;
-    channel.request_pty(true, "xterm", 80, 24, 0, 0, &[]).await?;
+    let term_size = get_terminal_size();
+    channel.request_pty(true, "xterm", term_size.cols, term_size.rows, 0, 0, &[]).await?;
     channel.request_shell(true).await?;
 
     for s in &login_script {
@@ -302,7 +327,8 @@ pub async fn execute_ssh_via_jump(
     }
 
     let mut channel = session.channel_open_session().await?;
-    channel.request_pty(true, "xterm", 80, 24, 0, 0, &[]).await?;
+    let term_size = get_terminal_size();
+    channel.request_pty(true, "xterm", term_size.cols, term_size.rows, 0, 0, &[]).await?;
     channel.request_shell(true).await?;
 
     for s in &jump_login_script {
