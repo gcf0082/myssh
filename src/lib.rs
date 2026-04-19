@@ -373,17 +373,12 @@ pub async fn execute_ssh(
 
                                 let content = &full_buf[output_start..];
 
-                                // 查找输出结束标记
-                                if content.contains("MY_end") {
-                                    if let Some(end_pos) = content.find("MY_end") {
-                                        let output = &content[..end_pos];
-                                        let output_clean = output.trim();
-                                        if !output_clean.is_empty() {
-                                            for line in output_clean.lines() {
-                                                safe_print_line(&format!("[{}] {}", node_id, line));
-                                            }
-                                        }
-                                    }
+                                // 查找输出结束标记：把 MY_end 之前的内容也走 line_buffer，
+                                // 保证前缀开关一致，同时保留跨 chunk 的半行拼接
+                                if let Some(end_pos) = content.find("MY_end") {
+                                    let output = &content[..end_pos];
+                                    line_buffer.feed(output, prefix);
+                                    line_buffer.flush(prefix);
                                     break;
                                 }
 
