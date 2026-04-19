@@ -28,6 +28,9 @@ cargo run -- -c "hostname" --prefix
 # [node2] server2.example.com
 # [node3] server3.example.com
 
+# 使用 --sync 并行执行但按节点顺序分块输出（注意：不要用于 tail -f 等持续输出命令）
+cargo run -- -c "id" --sync
+
 # 显示调试信息
 cargo run -- -c "uptime" --verbose
 
@@ -66,9 +69,41 @@ cargo run -- -i
 | `--nodes` | `-n` | 逗号分隔的节点 ID 列表（不指定则所有节点） | 否 |
 | `--prefix` | | 在每行输出前添加节点前缀 `[node_id]` | 否 |
 | `--verbose` | `-v` | 显示调试信息 | 否 |
-| `--interactive` | | 交互式模式（循环接收命令输入，类似 bash） | 否 |
+| `--interactive` | `-i` | 交互式模式（循环接收命令输入，类似 bash） | 否 |
+| `--sync` | | 并行执行但按节点顺序分块输出（见下方说明） | 否 |
 
 *注：在非交互式模式下，`--command` 为必填参数。在交互式模式下，不需要指定 `--command`。
+
+### `--sync` 说明
+
+默认情况下多个节点的输出会按到达时间**交错流式**打印到 stdout，多节点场景下不同节点的行容易混在一起不好读。加上 `--sync` 后：
+
+- 所有节点**仍然并行执行**（总耗时不变）
+- 每个节点的完整输出会先被缓存在内存里
+- 所有节点执行完毕后，按 `config.yaml` 中 `nodes[]` 的顺序（或 `--nodes` 参数里指定的顺序），一个节点一个节点地整块打印
+
+示例：
+
+```bash
+# 并行查 5 台机器的 id，看到的是按节点顺序的 5 个分组
+myssh -c id --sync
+
+# 配合 --prefix 还会在每行前加 [node_id]，方便日志抓取
+myssh -c "uname -a" --sync --prefix
+```
+
+#### ⚠️ 不要对持续输出的命令用 `--sync`
+
+`--sync` 的工作方式是**等命令执行完毕**才能把整块输出吐出来。对于**不会自然结束**或**会持续产生输出**的命令，加 `--sync` 会导致你在屏幕上长时间看不到任何东西（甚至永远看不到），此时应该用默认的流式输出模式：
+
+不要加 `--sync` 的典型场景：
+
+- `tail -f /var/log/xxx` —— 持续跟随日志，永不退出
+- `ping host` —— 持续输出，需要手动 Ctrl+C 终止
+- `journalctl -f`、`dmesg -w` —— 跟随模式的日志工具
+- 长时间运行、边跑边打印进度的任务（如 `rsync --progress`、大文件下载）
+
+这类命令用默认模式（不加 `--sync`），输出会实时到达 stdout，必要时可以再加 `--prefix` 区分节点。`--sync` 适合的是一次性、短时、完整输出的命令（`id`、`hostname`、`uname -a`、`df -h`、`cat 某个配置文件` 等）。
 
 ## 配置文件
 

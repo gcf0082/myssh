@@ -49,6 +49,7 @@ login_script:
 - Use `--nodes` or `-n` to filter which nodes to execute on (comma-separated list)
 - If `--nodes` is not specified, commands will run on all nodes
 - Multiple nodes execute commands in parallel
+- `--sync` keeps parallel execution but buffers each node's output and prints them as ordered blocks (config order). **Do not combine with unbounded/streaming commands** like `tail -f`, `ping`, `journalctl -f`, or `rsync --progress` — output only appears after the command exits, so streaming commands would show nothing. Use default mode for those.
 - No real tests in `src/lib.rs`; needs real tests added
 
 ## Examples
@@ -62,4 +63,7 @@ cargo run -- --command "hostname" --nodes node1,node3
 
 # Using short options
 cargo run -- -c "pwd" -n node2
+
+# Parallel execute with grouped per-node output (NOT for tail -f / streaming)
+cargo run -- -c "id" --sync
 ```
