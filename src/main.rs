@@ -288,13 +288,17 @@ fn handle_special_command(
     match cmd {
         "help" => {
             println!("Special commands (!! prefix):");
-            println!("  !!help              - Show this help");
-            println!("  !!node <subcmd>     - Node management commands");
-            println!("      set <list|all> - Set target nodes (e.g., !!node set node1,node2)");
-            println!("      list            - List all node IDs");
-            println!("      list -v         - List all nodes with details");
-            println!("  !!cd <path>         - Change working directory");
-            println!("  !!pwd                - Show current working directory");
+            println!("  !!help                 - Show this help");
+            println!("  !!node <subcmd>        - Node management commands");
+            println!("      set <list|all>    - Set target nodes (e.g., !!node set node1,node2)");
+            println!("      list               - List all node IDs");
+            println!("      list -v            - List all nodes with details");
+            println!("  !!cd <path>            - Change working directory");
+            println!("  !!pwd                  - Show current working directory");
+            println!("  !!prefix [on|off]      - Toggle per-line [node] prefix (no arg shows state)");
+            println!("  !!sync   [on|off]      - Toggle grouped-per-node output (no arg shows state)");
+            println!("                           Note: do NOT enable --sync for streaming commands");
+            println!("                                 like tail -f / ping — output buffers until exit.");
         }
         "node" => {
             let parts: Vec<&str> = args.split_whitespace().collect();
@@ -376,6 +380,36 @@ fn handle_special_command(
                 println!("Current working directory: (not set)");
             }
         }
+        "prefix" => match args.trim() {
+            "" => println!("Prefix: {}", if session.cli.prefix { "on" } else { "off" }),
+            "on" => {
+                session.cli.prefix = true;
+                println!("Prefix: on");
+            }
+            "off" => {
+                session.cli.prefix = false;
+                println!("Prefix: off");
+            }
+            _ => {
+                eprintln!("Usage: !!prefix [on|off]");
+                return Ok(false);
+            }
+        },
+        "sync" => match args.trim() {
+            "" => println!("Sync: {}", if session.cli.sync { "on" } else { "off" }),
+            "on" => {
+                session.cli.sync = true;
+                println!("Sync: on  (reminder: do not use with streaming commands like tail -f)");
+            }
+            "off" => {
+                session.cli.sync = false;
+                println!("Sync: off");
+            }
+            _ => {
+                eprintln!("Usage: !!sync [on|off]");
+                return Ok(false);
+            }
+        },
         _ => {
             eprintln!("Unknown command: !!{}", cmd);
             eprintln!("Type '!!help' for available commands");

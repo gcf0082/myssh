@@ -52,9 +52,13 @@ cargo run -- -i
 | `!!help` | 显示所有控制命令帮助 | `!!help` |
 | `!!node set <list>` | 设置目标节点列表 | `!!node set node1,node2`<br>`!!node set all` |
 | `!!node list` | 列出所有节点 ID | `!!node list` |
-| `!!node list -v` | 列出所有节点详细信息 | `!!node list -v`` |
+| `!!node list -v` | 列出所有节点详细信息 | `!!node list -v` |
 | `!!cd <path>` | 设置工作目录 | `!!cd /var/log`<br>`!!cd ~` |
 | `!!pwd` | 显示当前工作目录 | `!!pwd` |
+| `!!prefix [on\|off]` | 开关每行 `[node]` 前缀（无参数则显示当前状态） | `!!prefix on`<br>`!!prefix off`<br>`!!prefix` |
+| `!!sync [on\|off]` | 开关分块有序输出（无参数则显示当前状态） | `!!sync on`<br>`!!sync off` |
+
+> ⚠️ 执行 `tail -f`、`ping`、`journalctl -f` 等**持续输出/不会退出**的命令前，请先 `!!sync off`，否则输出会被缓冲直到命令退出，屏幕上看不到任何内容。
 
 交互式提示符会显示当前状态：
 - `myssh[all]>` - 显示当前节点
