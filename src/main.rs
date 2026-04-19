@@ -77,6 +77,8 @@ struct Cli {
     prefix: bool,
     #[arg(short, long, default_value = "false", help = "Interactive mode (keep connection open for multiple commands)")]
     interactive: bool,
+    #[arg(long, help = "Parallel execute but print each node's output as one grouped block in node order")]
+    sync: bool,
 }
 
 struct InteractiveSession {
@@ -164,6 +166,7 @@ async fn execute_on_all_nodes(
 
         let verbose = cli.verbose;
         let prefix = cli.prefix;
+        let sync = cli.sync;
         let current_dir = current_dir.clone();
 
         tasks.push(tokio::spawn(async move {
@@ -195,6 +198,7 @@ async fn execute_on_all_nodes(
                     commands,
                     verbose,
                     prefix,
+                    sync,
                 ).await
             } else {
                 myssh::execute_ssh(
@@ -207,6 +211,7 @@ async fn execute_on_all_nodes(
                     commands,
                     verbose,
                     prefix,
+                    sync,
                 ).await
             }
         }));
@@ -215,6 +220,9 @@ async fn execute_on_all_nodes(
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
 
+    // spawn 顺序已经 = 配置/--nodes 过滤后的节点顺序，
+    // 串行 await 每个 handle 并 replay 其捕获的输出即天然按节点顺序打印（sync 模式）。
+    // 非 sync 模式下捕获 vec 恒为空，println 循环等价空操作。
     let any_failed = tokio::select! {
         _ = ctrl_c.as_mut() => {
             eprintln!("\nCtrl+C received, aborting all tasks...");
@@ -227,9 +235,14 @@ async fn execute_on_all_nodes(
             let mut failed = false;
             for handle in &mut tasks {
                 match handle.await {
-                    Ok(Ok(success)) if !success => failed = true,
+                    Ok(Ok((success, lines))) => {
+                        for line in &lines {
+                            println!("{}", line);
+                        }
+                        if !success { failed = true; }
+                    }
                     Ok(Err(e)) => eprintln!("\nTask failed: {}", e),
-                    _ => {}
+                    Err(_) => {}
                 }
             }
             failed

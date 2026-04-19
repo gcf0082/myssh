@@ -13,59 +13,70 @@ lazy_static::lazy_static! {
     static ref STDOUT_LOCK: Mutex<()> = Mutex::new(());
 }
 
-// 行缓冲器，用于并发场景下按行缓冲输出
+// 行缓冲器：按行拆分输出，支持两种模式：
+//   直写模式（captured=None）：每行立即加锁写 stdout，保持现有流式行为
+//   捕获模式（captured=Some）：每行格式化后 push 进内部 Vec，由上层协调打印顺序
 struct LineBuffer {
-    prefix: String,    // 节点ID前缀，如 "[node1]"
-    buffer: String,     // 缓冲区，存储未完整行
+    prefix: String,                    // 节点ID前缀，如 "[node1]"
+    buffer: String,                    // 缓冲区，存储未完整行
+    captured: Option<Vec<String>>,     // Some 则捕获到 vec 不写 stdout；None 则直写 stdout
 }
 
 impl LineBuffer {
-    // 创建新的行缓冲器
-    fn new(node_id: &str) -> Self {
+    // 创建新的行缓冲器。capture=true 时启用捕获模式
+    fn new(node_id: &str, capture: bool) -> Self {
         LineBuffer {
             prefix: format!("[{}]", node_id),
             buffer: String::new(),
+            captured: if capture { Some(Vec::new()) } else { None },
         }
     }
 
+    // 按 with_prefix 拼出完整一行，然后捕获或直写 stdout
+    fn emit_line(&mut self, line: &str, with_prefix: bool) {
+        if let Some(ref mut vec) = self.captured {
+            let formatted = if with_prefix {
+                format!("{} {}", self.prefix, line)
+            } else {
+                line.to_string()
+            };
+            vec.push(formatted);
+            return;
+        }
+
+        let _guard = STDOUT_LOCK.lock().unwrap();
+        let mut stdout = stdout();
+        if with_prefix {
+            let _ = stdout.write_all(self.prefix.as_bytes());
+            let _ = stdout.write_all(b" ");
+        }
+        let _ = stdout.write_all(line.as_bytes());
+        let _ = stdout.write_all(b"\n");
+        let _ = stdout.flush();
+    }
+
     // 喂入数据，按行处理并输出
-    // 每遇到一个换行符就输出一行，减少锁争用
     fn feed(&mut self, data: &str, with_prefix: bool) {
         self.buffer.push_str(data);
 
         while let Some(pos) = self.buffer.find('\n') {
-            let line = &self.buffer[..pos];
-            let _guard = STDOUT_LOCK.lock().unwrap();
-            let mut stdout = stdout();
-
-            if with_prefix {
-                let _ = stdout.write_all(self.prefix.as_bytes());
-                let _ = stdout.write_all(b" ");
-            }
-            let _ = stdout.write_all(line.as_bytes());
-            let _ = stdout.write_all(b"\n");
-            let _ = stdout.flush();
-
+            let line = self.buffer[..pos].to_string();
+            self.emit_line(&line, with_prefix);
             self.buffer = self.buffer[pos + 1..].to_string();
         }
     }
 
-    // 刷新缓冲区，输出剩余内容
+    // 刷新缓冲区，输出剩余的半行（无结尾换行）
     fn flush(&mut self, with_prefix: bool) {
         if !self.buffer.is_empty() {
-            let _guard = STDOUT_LOCK.lock().unwrap();
-            let mut stdout = stdout();
-
-            if with_prefix {
-                let _ = stdout.write_all(self.prefix.as_bytes());
-                let _ = stdout.write_all(b" ");
-            }
-            let _ = stdout.write_all(self.buffer.as_bytes());
-            let _ = stdout.write_all(b"\n");
-            let _ = stdout.flush();
-
-            self.buffer.clear();
+            let line = std::mem::take(&mut self.buffer);
+            self.emit_line(&line, with_prefix);
         }
+    }
+
+    // 取出捕获的所有行（非捕获模式返回空 vec）
+    fn drain(&mut self) -> Vec<String> {
+        self.captured.take().unwrap_or_default()
     }
 }
 
@@ -216,13 +227,14 @@ pub async fn execute_ssh(
     commands: Vec<ScriptStep>,
     verbose: bool,
     prefix: bool,
-) -> Result<bool> {
+    capture: bool,
+) -> Result<(bool, Vec<String>)> {
     if verbose {
         eprintln!("[DEBUG][{}] Connecting to {}:{} as {}", node_id, host, port, user);
     }
     let total_steps = login_script.len() + commands.len();
     if total_steps == 0 {
-        return Ok(true);
+        return Ok((true, Vec::new()));
     }
 
     // 创建SSH配置并连接
@@ -292,6 +304,8 @@ pub async fn execute_ssh(
     let mut interrupted = false;
     let mut full_buf = String::new();
     let mut output_start = 0;
+    // 行缓冲器跨命令持有，捕获模式下 drain 出所有累积的行
+    let mut line_buffer = LineBuffer::new(&node_id, capture);
 
     // 执行命令
     for s in &commands {
@@ -337,8 +351,6 @@ pub async fn execute_ssh(
         let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -s;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
 
-        // 创建行缓冲器
-        let mut line_buffer = LineBuffer::new(&node_id);
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
 
@@ -398,6 +410,8 @@ pub async fn execute_ssh(
         }
     }
 
+    let captured = line_buffer.drain();
+
     // 中断处理
     if interrupted {
         if let Err(e) = channel.eof().await {
@@ -406,13 +420,13 @@ pub async fn execute_ssh(
         if let Err(e) = session.disconnect(Disconnect::ByApplication, "", "").await {
             eprintln!("[DEBUG] Disconnect error (ignored): {}", e);
         }
-        return Ok(false);
+        return Ok((false, captured));
     }
 
     let _ = channel.eof().await;
     session.disconnect(Disconnect::ByApplication, "", "").await?;
 
-    Ok(true)
+    Ok((true, captured))
 }
 
 // 通过跳板机SSH执行函数
@@ -431,7 +445,8 @@ pub async fn execute_ssh_via_jump(
     commands: Vec<ScriptStep>,
     verbose: bool,
     prefix: bool,
-) -> Result<bool> {
+    capture: bool,
+) -> Result<(bool, Vec<String>)> {
     if verbose {
         eprintln!("[DEBUG][{}] Connecting to jump host {}:{} as {}", node_id, jump_host, jump_port, jump_user);
     }
@@ -530,14 +545,14 @@ pub async fn execute_ssh_via_jump(
                         }
                     }
                 } else {
-                    return Ok(false);
+                    return Ok((false, Vec::new()));
                 }
             }
         }
     }
 
     if interrupted {
-        return Ok(false);
+        return Ok((false, Vec::new()));
     }
 
     // 发送目标主机密码
@@ -588,6 +603,8 @@ pub async fn execute_ssh_via_jump(
 
     let mut full_buf = String::new();
     let mut output_start = 0;
+    // 行缓冲器跨命令持有，捕获模式下 drain 出所有累积的行
+    let mut line_buffer = LineBuffer::new(&node_id, capture);
 
     // 执行目标主机命令
     for s in &commands {
@@ -632,7 +649,6 @@ pub async fn execute_ssh_via_jump(
         let cmd = format!("echo MY_begin;echo {} | base64 -d | bash -s;echo MY_end\n", encoded_cmd);
         channel.data(cmd.as_bytes()).await?;
 
-        let mut line_buffer = LineBuffer::new(&node_id);
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
 
@@ -688,6 +704,8 @@ pub async fn execute_ssh_via_jump(
         }
     }
 
+    let captured = line_buffer.drain();
+
     if interrupted {
         if let Err(e) = channel.eof().await {
             eprintln!("[DEBUG] Channel EOF error (ignored): {}", e);
@@ -695,13 +713,13 @@ pub async fn execute_ssh_via_jump(
         if let Err(e) = session.disconnect(Disconnect::ByApplication, "", "").await {
             eprintln!("[DEBUG] Disconnect error (ignored): {}", e);
         }
-        return Ok(false);
+        return Ok((false, captured));
     }
 
     let _ = channel.eof().await;
     session.disconnect(Disconnect::ByApplication, "", "").await?;
 
-    Ok(true)
+    Ok((true, captured))
 }
 
 #[cfg(test)]
@@ -765,5 +783,50 @@ mod tests {
         // 包含中文字符时不应破坏UTF-8
         let mixed = "\x1b[32m密码:\x1b[0m ";
         assert_eq!(strip_ansi(mixed), "密码: ");
+    }
+
+    #[test]
+    fn test_line_buffer_capture_basic() {
+        // 捕获模式：整行 push 进 vec，不带前缀
+        let mut lb = LineBuffer::new("n1", true);
+        lb.feed("hello\nworld\n", false);
+        let out = lb.drain();
+        assert_eq!(out, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_line_buffer_capture_with_prefix() {
+        // 捕获模式 + 前缀：每行 push "[node] line"
+        let mut lb = LineBuffer::new("n1", true);
+        lb.feed("a\nb\n", true);
+        let out = lb.drain();
+        assert_eq!(out, vec!["[n1] a", "[n1] b"]);
+    }
+
+    #[test]
+    fn test_line_buffer_capture_partial_line_flush() {
+        // feed 半行无换行 → flush 把残行作为最后一个元素 push
+        let mut lb = LineBuffer::new("n1", true);
+        lb.feed("done\npartial", false);
+        lb.flush(false);
+        let out = lb.drain();
+        assert_eq!(out, vec!["done", "partial"]);
+    }
+
+    #[test]
+    fn test_line_buffer_non_capture_drain_empty() {
+        // 非捕获模式 drain 返回空 vec，且 feed 不会 panic（不断言 stdout）
+        let mut lb = LineBuffer::new("n1", false);
+        assert!(lb.drain().is_empty());
+    }
+
+    #[test]
+    fn test_line_buffer_capture_drain_resets() {
+        // drain 后再次 drain 返回空
+        let mut lb = LineBuffer::new("n1", true);
+        lb.feed("x\n", false);
+        let first = lb.drain();
+        assert_eq!(first, vec!["x"]);
+        assert!(lb.drain().is_empty());
     }
 }
