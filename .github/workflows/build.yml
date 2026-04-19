@@ -38,12 +38,9 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install Rust toolchain
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        profile: minimal
-        toolchain: stable
-        target: ${{ matrix.target }}
-        override: true
+        targets: ${{ matrix.target }}
 
     - name: Install cross
       if: matrix.use_cross
@@ -84,15 +81,30 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
 
     steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
         path: ./artifacts
 
+    - name: Delete existing release and tag (if any)
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ github.event.inputs.version }}
+      run: |
+        # 若同名 release 已存在，连同 tag 一起删除，保证本次发布为全新覆盖
+        gh release delete "$VERSION" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+        # 兜底：确保 tag 已从远端移除（release 存在但 tag 已手动删除等边界情况）
+        git push --delete origin "refs/tags/$VERSION" || true
+
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
-        files: ./artifacts/**/*.exe,./artifacts/**/myssh-*
+        files: |
+          ./artifacts/**/*.exe
+          ./artifacts/**/myssh-*
         tag_name: ${{ github.event.inputs.version }}
         name: Release ${{ github.event.inputs.version }}
         generate_release_notes: true
