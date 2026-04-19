@@ -173,6 +173,41 @@ fn check_wait_appeared(wait_pattern: &str, output: &str) -> bool {
     false
 }
 
+// 去除ANSI转义序列（颜色、光标控制、终端标题等）
+// 仅用于登录阶段/提示符匹配，避免彩色prompt导致子串匹配失败
+// 命令执行阶段的输出不经过此函数，保留原始字节
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            result.push(c);
+            continue;
+        }
+        match chars.next() {
+            // CSI: ESC [ ... 以 0x40-0x7E 范围的字节终止（如 m, K, H 等）
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if matches!(c, '\x40'..='\x7e') { break; }
+                }
+            }
+            // OSC: ESC ] ... 以 BEL (0x07) 或 ST (ESC \) 终止（常见于终端标题）
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' { break; }
+                    if c == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            // 其它两字符转义序列（字符集切换、简单控制等），直接丢弃ESC后的一个字符
+            _ => {}
+        }
+    }
+    result
+}
+
 // 将命令编码为base64
 fn encode_base64_command(command: &str) -> String {
     STANDARD.encode(command)
@@ -236,7 +271,7 @@ pub async fn execute_ssh(
                                 eprint!("[DEBUG][{}] Received: {}", node_id, txt);
                             }
                             buf.push_str(&txt);
-                            if check_wait_appeared(&s.wait, &buf) {
+                            if check_wait_appeared(&s.wait, &strip_ansi(&buf)) {
                                 return true;
                             }
                         }
@@ -284,7 +319,7 @@ pub async fn execute_ssh(
                                 eprint!("[DEBUG][{}] Received: {}", node_id, txt);
                             }
                             buf.push_str(&txt);
-                            if check_wait_appeared(&s.wait, &buf) {
+                            if check_wait_appeared(&s.wait, &strip_ansi(&buf)) {
                                 return true;
                             }
                         }
@@ -449,7 +484,7 @@ pub async fn execute_ssh_via_jump(
                                 eprint!("[DEBUG][{}] Jump received: {}", node_id, txt);
                             }
                             buf.push_str(&txt);
-                            if check_wait_appeared(&s.wait, &buf) {
+                            if check_wait_appeared(&s.wait, &strip_ansi(&buf)) {
                                 return true;
                             }
                         }
@@ -502,7 +537,8 @@ pub async fn execute_ssh_via_jump(
                         if verbose {
                             eprintln!("[DEBUG][{}] Jump output: {:?}", node_id, txt);
                         }
-                        if buf.contains("password:") || buf.contains("Password:") {
+                        let clean = strip_ansi(&buf);
+                        if clean.contains("password:") || clean.contains("Password:") {
                             break;
                         }
                     }
@@ -538,7 +574,7 @@ pub async fn execute_ssh_via_jump(
                                 eprint!("[DEBUG][{}] Target received: {}", node_id, txt);
                             }
                             buf.push_str(&txt);
-                            if check_wait_appeared(&s.wait, &buf) {
+                            if check_wait_appeared(&s.wait, &strip_ansi(&buf)) {
                                 return true;
                             }
                         }
@@ -583,7 +619,7 @@ pub async fn execute_ssh_via_jump(
                                 eprint!("[DEBUG][{}] Target received: {}", node_id, txt);
                             }
                             buf.push_str(&txt);
-                            if check_wait_appeared(&s.wait, &buf) {
+                            if check_wait_appeared(&s.wait, &strip_ansi(&buf)) {
                                 return true;
                             }
                         }
@@ -704,5 +740,47 @@ mod tests {
         assert!(!check_wait_appeared("$", "user@host:~#"));
         assert!(check_wait_appeared("$|#", "user@host:~$"));
         assert!(check_wait_appeared("$|#", "user@host:~#"));
+    }
+
+    #[test]
+    fn test_strip_ansi_csi() {
+        // 彩色prompt: \e[32muser@host\e[0m:\e[34m~\e[0m$
+        let colored = "\x1b[32muser@host\x1b[0m:\x1b[34m~\x1b[0m$ ";
+        assert_eq!(strip_ansi(colored), "user@host:~$ ");
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_title() {
+        // 终端标题: \e]0;user@host\a$
+        let with_title = "\x1b]0;user@host\x07user@host:~$ ";
+        assert_eq!(strip_ansi(with_title), "user@host:~$ ");
+    }
+
+    #[test]
+    fn test_strip_ansi_bracketed_paste() {
+        // bracketed paste 模式，bash 常见
+        let bp = "\x1b[?2004h$ ";
+        assert_eq!(strip_ansi(bp), "$ ");
+    }
+
+    #[test]
+    fn test_strip_ansi_preserves_plain() {
+        // 无转义序列的字符串应原样返回
+        assert_eq!(strip_ansi("Password: "), "Password: ");
+        assert_eq!(strip_ansi("user@host:~$ "), "user@host:~$ ");
+    }
+
+    #[test]
+    fn test_strip_ansi_with_wait_match() {
+        // 彩色prompt下，等待匹配应能成功
+        let colored_prompt = "\x1b[0;32muser@host\x1b[0m:~\x1b[0;34m$\x1b[0m ";
+        assert!(check_wait_appeared("$", &strip_ansi(colored_prompt)));
+    }
+
+    #[test]
+    fn test_strip_ansi_utf8_safe() {
+        // 包含中文字符时不应破坏UTF-8
+        let mixed = "\x1b[32m密码:\x1b[0m ";
+        assert_eq!(strip_ansi(mixed), "密码: ");
     }
 }
