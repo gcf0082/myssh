@@ -10,6 +10,7 @@ Rust SSH automation tool that connects to multiple remote servers in parallel an
 - `cargo run -- --command <cmd>` - Run on all nodes (requires `config.yaml` in project root)
 - `cargo run -- --command <cmd> --nodes <id1,id2>` - Run on specific nodes only
 - `cargo test` - Run tests
+- `cargo run -- --list-nodes [-v] [-n <ids>]` - List nodes from config and exit (no SSH)
 
 ## Architecture
 
@@ -66,4 +67,8 @@ cargo run -- -c "pwd" -n node2
 
 # Parallel execute with grouped per-node output (NOT for tail -f / streaming)
 cargo run -- -c "id" --sync
+
+# List nodes from config.yaml and exit (no SSH performed)
+cargo run -- --list-nodes          # node1, node2, node3
+cargo run -- --list-nodes -v       # id\thost:port\tuser\tdirect|via-jump
 ```

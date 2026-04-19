@@ -79,6 +79,8 @@ struct Cli {
     interactive: bool,
     #[arg(long, help = "Parallel execute but print each node's output as one grouped block in node order")]
     sync: bool,
+    #[arg(long, help = "List nodes from config.yaml and exit (honors -v for details and -n to filter)")]
+    list_nodes: bool,
 }
 
 struct InteractiveSession {
@@ -266,6 +268,45 @@ fn parse_special_command(line: &str) -> Option<(&str, &str)> {
     }
 }
 
+// 按 config 中的原始顺序收集节点，应用 filter（None=全部）
+// verbose=false：单元素 vec，逗号分隔的 id 列表
+// verbose=true：每节点一行，tab 分隔 {id}\t{host:port}\t{user}\t{direct|via-jump}
+fn format_node_list(
+    ssh_config: &SshverConfig,
+    verbose: bool,
+    filter: &Option<HashSet<String>>,
+) -> Vec<String> {
+    let default_user = &ssh_config.defaults.user;
+    let default_port = ssh_config.defaults.port;
+    let default_use_jump = ssh_config.defaults.use_jump;
+
+    let selected: Vec<&NodeConfig> = ssh_config.nodes.iter()
+        .filter(|n| match filter {
+            Some(ids) => ids.contains(&n.id),
+            None => true,
+        })
+        .collect();
+
+    if !verbose {
+        let ids: Vec<String> = selected.iter().map(|n| n.id.clone()).collect();
+        return vec![ids.join(", ")];
+    }
+
+    selected.iter().map(|n| {
+        let user = if n.user.is_empty() { default_user } else { &n.user };
+        let port = if n.port == 22 && default_port != 22 { default_port } else { n.port };
+        let jump = n.use_jump.unwrap_or(default_use_jump);
+        format!(
+            "{}\t{}:{}\t{}\t{}",
+            n.id,
+            n.host,
+            port,
+            user,
+            if jump { "via-jump" } else { "direct" }
+        )
+    }).collect()
+}
+
 fn get_node_names(ssh_config: &SshverConfig, target_node_ids: &Option<HashSet<String>>) -> String {
     if let Some(ref ids) = target_node_ids {
         let mut names: Vec<_> = ssh_config.nodes
@@ -343,15 +384,8 @@ fn handle_special_command(
                 }
                 "list" => {
                     let verbose = subargs.iter().any(|&s| s == "-v");
-                    if verbose {
-                        println!("Node details:");
-                        for node in &session.ssh_config.nodes {
-                            println!("  {} - {}", node.id, node.host);
-                        }
-                    } else {
-                        let mut node_ids: Vec<_> = session.ssh_config.nodes.iter().map(|n| n.id.clone()).collect();
-                        node_ids.sort();
-                        println!("Available nodes: {}", node_ids.join(", "));
+                    for line in format_node_list(&session.ssh_config, verbose, &session.target_node_ids) {
+                        println!("{}", line);
                     }
                 }
                 "help" | _ => {
@@ -518,6 +552,26 @@ async fn main() -> Result<()> {
 
     let config_str = std::fs::read_to_string("config.yaml")?;
     let config: SshverConfig = serde_yaml::from_str(&config_str)?;
+
+    if cli.list_nodes {
+        let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
+            s.split(',').map(|id| id.trim().to_string()).collect()
+        });
+
+        if let Some(ref ids) = target_node_ids {
+            let all_node_ids: HashSet<String> = config.nodes.iter().map(|n| n.id.clone()).collect();
+            let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
+            if !missing_ids.is_empty() {
+                eprintln!("Error: Node(s) not found: {}", missing_ids.join(", "));
+                std::process::exit(1);
+            }
+        }
+
+        for line in format_node_list(&config, cli.verbose, &target_node_ids) {
+            println!("{}", line);
+        }
+        return Ok(());
+    }
 
     if cli.interactive {
         run_interactive_session().await?;

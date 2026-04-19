@@ -31,6 +31,11 @@ cargo run -- -c "hostname" --prefix
 # 使用 --sync 并行执行但按节点顺序分块输出（注意：不要用于 tail -f 等持续输出命令）
 cargo run -- -c "id" --sync
 
+# 列出配置中的节点（stdout 输出，方便 pipe 给其它工具）
+cargo run -- --list-nodes                    # node1, node2, node3
+cargo run -- --list-nodes -v                 # 每行 tab 分隔：id  host:port  user  direct|via-jump
+cargo run -- --list-nodes -n node1,node3     # 只列指定节点
+
 # 显示调试信息
 cargo run -- -c "uptime" --verbose
 
@@ -52,7 +57,7 @@ cargo run -- -i
 | `!!help` | 显示所有控制命令帮助 | `!!help` |
 | `!!node set <list>` | 设置目标节点列表 | `!!node set node1,node2`<br>`!!node set all` |
 | `!!node list` | 列出所有节点 ID | `!!node list` |
-| `!!node list -v` | 列出所有节点详细信息 | `!!node list -v` |
+| `!!node list -v` | 列出节点详情（id / host:port / user / direct\|via-jump，tab 分隔） | `!!node list -v` |
 | `!!cd <path>` | 设置工作目录 | `!!cd /var/log`<br>`!!cd ~` |
 | `!!pwd` | 显示当前工作目录 | `!!pwd` |
 | `!!prefix [on\|off]` | 开关每行 `[node]` 前缀（无参数则显示当前状态） | `!!prefix on`<br>`!!prefix off`<br>`!!prefix` |
@@ -75,6 +80,7 @@ cargo run -- -i
 | `--verbose` | `-v` | 显示调试信息 | 否 |
 | `--interactive` | `-i` | 交互式模式（循环接收命令输入，类似 bash） | 否 |
 | `--sync` | | 并行执行但按节点顺序分块输出（见下方说明） | 否 |
+| `--list-nodes` | | 列出 `config.yaml` 中的节点后退出（配合 `-v` 显示详情，`-n` 过滤） | 否 |
 
 *注：在非交互式模式下，`--command` 为必填参数。在交互式模式下，不需要指定 `--command`。
 
