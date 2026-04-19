@@ -66,14 +66,14 @@ struct NodeConfig {
 
 const EXAMPLES: &str = "\
 Examples:
-  myssh -c id                      在所有节点执行 id
-  myssh -c id -n node1,node3       只在指定节点执行
-  myssh -c id --prefix             每行输出加 [node] 前缀
-  myssh -c id --sync               并行执行、按节点顺序分块打印
-                                   (注意: 不要用于 tail -f / ping 等持续输出命令)
-  myssh --list-nodes               列出配置中的节点 ID
-  myssh --list-nodes -v            列出节点详情 (id / host:port / user / jump)
-  myssh -i                         进入交互式模式，输入 !!help 查看命令
+  myssh --command 'cat /etc/hostname'                              Run on all nodes
+  myssh --command 'cat /etc/hostname' --nodes node1,node3          Run only on the given nodes
+  myssh --command 'cat /etc/hostname' --prefix                     Prefix each output line with [node]
+  myssh --command 'cat /etc/hostname' --sync                       Parallel execute, grouped per-node output
+                                                                   (do NOT use with tail -f / ping-like streaming commands)
+  myssh --list-nodes                                               List node IDs from config.yaml
+  myssh --list-nodes --verbose                                     List node details (id / host:port / user / jump)
+  myssh --interactive                                              Enter interactive mode; type !!help for commands
 ";
 
 #[derive(Parser, Debug)]
