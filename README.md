@@ -117,7 +117,12 @@ myssh -c "uname -a" --sync --prefix
 
 ## 配置文件
 
-配置文件位于项目根目录的 `config.yaml`。
+`config.yaml` 按下列顺序查找，命中第一个存在的文件即使用：
+
+1. **myssh 二进制所在目录** 下的 `config.yaml`（首选；跟随可执行文件分发最直接）
+2. **用户家目录** 下的 `~/.myssh/config.yaml`（fallback；跨平台一致——Linux/macOS 读 `$HOME`，Windows 读 `%USERPROFILE%`）
+
+两处都不存在时会报错并列出尝试过的路径。
 
 ### 完整配置示例
 

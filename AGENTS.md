@@ -7,7 +7,7 @@ Rust SSH automation tool that connects to multiple remote servers in parallel an
 ## Commands
 
 - `cargo build` - Build the project
-- `cargo run -- --command <cmd>` - Run on all nodes (requires `config.yaml` in project root)
+- `cargo run -- --command <cmd>` - Run on all nodes (requires `config.yaml` — see lookup order below)
 - `cargo run -- --command <cmd> --nodes <id1,id2>` - Run on specific nodes only
 - `cargo test` - Run tests
 - `cargo run -- --list-nodes [-v] [-n <ids>]` - List nodes from config and exit (no SSH)
@@ -15,7 +15,7 @@ Rust SSH automation tool that connects to multiple remote servers in parallel an
 ## Architecture
 
 - **Entry point**: `src/main.rs`
-- **Config**: YAML file at project root loaded at runtime (contains SSH credentials - do not commit)
+- **Config**: `config.yaml` loaded at runtime (contains SSH credentials - do not commit). Lookup order: (1) same directory as the `myssh` executable, (2) `~/.myssh/config.yaml` (user home — `$HOME` on unix, `%USERPROFILE%` on Windows). First match wins.
 - **Execution flow**: Parse config → Filter nodes by --nodes argument → Spawn parallel SSH connections for each node → Run `login_script` steps → Execute CLI command → Stream output until Ctrl+C
 
 ## Configuration File Format

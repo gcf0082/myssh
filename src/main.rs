@@ -1,6 +1,52 @@
 use anyhow::Result;
 use clap::Parser;
 use std::collections::HashSet;
+use std::path::PathBuf;
+
+// 用户家目录，跨平台：Unix 读 HOME，Windows 读 USERPROFILE
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(unix)]
+    let key = "HOME";
+    #[cfg(windows)]
+    let key = "USERPROFILE";
+    std::env::var_os(key).map(PathBuf::from)
+}
+
+// myssh 二进制所在目录（用于 fallback）
+fn exe_dir() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()))
+}
+
+// config.yaml 的查找顺序：
+//   1) 二进制所在目录/config.yaml
+//   2) ~/.myssh/config.yaml
+fn resolve_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(d) = exe_dir() {
+        paths.push(d.join("config.yaml"));
+    }
+    if let Some(h) = home_dir() {
+        paths.push(h.join(".myssh").join("config.yaml"));
+    }
+    paths
+}
+
+fn load_config() -> Result<SshverConfig> {
+    let paths = resolve_config_paths();
+    for p in &paths {
+        if p.exists() {
+            let s = std::fs::read_to_string(p)
+                .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", p.display(), e))?;
+            let cfg: SshverConfig = serde_yaml::from_str(&s)?;
+            return Ok(cfg);
+        }
+    }
+    let tried: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+    Err(anyhow::anyhow!(
+        "config.yaml not found. Tried (in order): {}",
+        if tried.is_empty() { "<no candidates>".to_string() } else { tried.join(", ") }
+    ))
+}
 
 #[derive(Debug, serde::Deserialize)]
 struct SshverConfig {
@@ -470,8 +516,7 @@ async fn run_interactive_session() -> Result<()> {
     use rustyline::history::MemHistory;
 
     let cli = Cli::parse();
-    let config_str = std::fs::read_to_string("config.yaml")?;
-    let ssh_config: SshverConfig = serde_yaml::from_str(&config_str)?;
+    let ssh_config: SshverConfig = load_config()?;
 
     let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
         s.split(',').map(|id| id.trim().to_string()).collect()
@@ -562,8 +607,7 @@ async fn run_interactive_session() -> Result<()> {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let config_str = std::fs::read_to_string("config.yaml")?;
-    let config: SshverConfig = serde_yaml::from_str(&config_str)?;
+    let config: SshverConfig = load_config()?;
 
     if cli.list_nodes {
         let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
