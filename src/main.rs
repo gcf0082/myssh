@@ -64,8 +64,20 @@ struct NodeConfig {
     pub use_jump: Option<bool>,
 }
 
+const EXAMPLES: &str = "\
+Examples:
+  myssh -c id                      在所有节点执行 id
+  myssh -c id -n node1,node3       只在指定节点执行
+  myssh -c id --prefix             每行输出加 [node] 前缀
+  myssh -c id --sync               并行执行、按节点顺序分块打印
+                                   (注意: 不要用于 tail -f / ping 等持续输出命令)
+  myssh --list-nodes               列出配置中的节点 ID
+  myssh --list-nodes -v            列出节点详情 (id / host:port / user / jump)
+  myssh -i                         进入交互式模式，输入 !!help 查看命令
+";
+
 #[derive(Parser, Debug)]
-#[command(name = "myssh")]
+#[command(name = "myssh", after_help = EXAMPLES)]
 struct Cli {
     #[arg(short, long, help = "Command to execute (required in non-interactive mode)")]
     command: Option<String>,
