@@ -1,16 +1,109 @@
 use anyhow::Result;
 use russh::{client::Handler, Disconnect, ChannelMsg};
+use russh::{cipher, kex, mac, Preferred};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use async_trait::async_trait;
-use russh_keys::key::PublicKey;
+use russh_keys::key::{self, PublicKey};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::io::{Write, stdout};
+use std::borrow::Cow;
 
 // 全局stdout锁，用于并发输出保护
 lazy_static::lazy_static! {
     static ref STDOUT_LOCK: Mutex<()> = Mutex::new(());
+}
+
+// 构造一个尽量兼容的 russh 客户端配置：
+//   - 现代算法（curve25519、ed25519、ChaCha20、AES-GCM/CTR、HMAC-SHA2 等）排在前面，谈判优先选中
+//   - 紧随其后追加 legacy 算法（ssh-rsa、DH-group14-sha1、AES-CBC、3DES-CBC 等），让面向老 server
+//     （CentOS6/7、华为/H3C/Cisco、IBM AIX、各类管理板）也能成功握手
+// 安全性：仅在双方都不支持现代算法时才回退到 legacy；现代场景下行为不变。
+fn build_ssh_config() -> Arc<russh::client::Config> {
+    let preferred = Preferred {
+        kex: Cow::Owned(vec![
+            // modern
+            kex::CURVE25519,
+            kex::CURVE25519_PRE_RFC_8731,
+            kex::DH_G16_SHA512,
+            kex::DH_G14_SHA256,
+            kex::ECDH_SHA2_NISTP256,
+            kex::ECDH_SHA2_NISTP384,
+            kex::ECDH_SHA2_NISTP521,
+            // legacy
+            kex::DH_G14_SHA1,
+            kex::DH_G1_SHA1,
+            // ext-info / strict-kex 标记，必须保留
+            kex::EXTENSION_SUPPORT_AS_CLIENT,
+            kex::EXTENSION_SUPPORT_AS_SERVER,
+            kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
+            kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER,
+        ]),
+        key: Cow::Owned(vec![
+            key::ED25519,
+            key::ECDSA_SHA2_NISTP256,
+            key::ECDSA_SHA2_NISTP384,
+            key::ECDSA_SHA2_NISTP521,
+            key::RSA_SHA2_512,
+            key::RSA_SHA2_256,
+            // legacy ssh-rsa（RSA + SHA-1 签名）—— 老服务器最常见的 host key 类型
+            key::SSH_RSA,
+        ]),
+        cipher: Cow::Owned(vec![
+            cipher::CHACHA20_POLY1305,
+            cipher::AES_256_GCM,
+            cipher::AES_256_CTR,
+            cipher::AES_192_CTR,
+            cipher::AES_128_CTR,
+            // legacy CBC
+            cipher::AES_256_CBC,
+            cipher::AES_192_CBC,
+            cipher::AES_128_CBC,
+            cipher::TRIPLE_DES_CBC,
+        ]),
+        mac: Cow::Owned(vec![
+            mac::HMAC_SHA512_ETM,
+            mac::HMAC_SHA256_ETM,
+            mac::HMAC_SHA512,
+            mac::HMAC_SHA256,
+            mac::HMAC_SHA1_ETM,
+            mac::HMAC_SHA1,
+        ]),
+        compression: Preferred::DEFAULT.compression.clone(),
+    };
+    Arc::new(russh::client::Config {
+        preferred,
+        ..russh::client::Config::default()
+    })
+}
+
+// 认证：先 password，失败再尝试 keyboard-interactive
+// 不少 PAM 配置只允许 keyboard-interactive，纯 password 会被拒
+async fn try_authenticate(
+    session: &mut russh::client::Handle<ClientHandler>,
+    user: &str,
+    password: &str,
+) -> Result<bool> {
+    if session.authenticate_password(user, password).await? {
+        return Ok(true);
+    }
+    let mut resp = session
+        .authenticate_keyboard_interactive_start(user.to_string(), None)
+        .await?;
+    loop {
+        match resp {
+            russh::client::KeyboardInteractiveAuthResponse::Success => return Ok(true),
+            russh::client::KeyboardInteractiveAuthResponse::Failure => return Ok(false),
+            russh::client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                // 把 password 应答给每个 prompt（绝大多数 PAM 流程只问一次密码）
+                let answers: Vec<String> = prompts.iter().map(|_| password.to_string()).collect();
+                resp = session
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await?;
+            }
+        }
+    }
 }
 
 // 行缓冲器：按行拆分输出，支持两种模式：
@@ -237,8 +330,8 @@ pub async fn execute_ssh(
         return Ok((true, Vec::new()));
     }
 
-    // 创建SSH配置并连接
-    let ssh_config = Arc::new(russh::client::Config::default());
+    // 创建SSH配置并连接（带扩展算法兼容集，方便老 server 协商）
+    let ssh_config = build_ssh_config();
 
     let mut session = russh::client::connect(
         ssh_config,
@@ -246,8 +339,8 @@ pub async fn execute_ssh(
         ClientHandler,
     ).await?;
 
-    // 密码认证
-    if !session.authenticate_password(&user, &password).await? {
+    // 认证：先 password，失败兜底走 keyboard-interactive
+    if !try_authenticate(&mut session, &user, &password).await? {
         return Err(anyhow::anyhow!("{}:{}:{} - Authentication failed: Invalid password or username", host, port, user));
     }
 
@@ -451,8 +544,8 @@ pub async fn execute_ssh_via_jump(
         eprintln!("[DEBUG][{}] Connecting to jump host {}:{} as {}", node_id, jump_host, jump_port, jump_user);
     }
 
-    // 连接跳板机
-    let ssh_config = Arc::new(russh::client::Config::default());
+    // 连接跳板机（同样使用扩展算法兼容集）
+    let ssh_config = build_ssh_config();
 
     let mut session = russh::client::connect(
         ssh_config,
@@ -460,7 +553,7 @@ pub async fn execute_ssh_via_jump(
         ClientHandler,
     ).await?;
 
-    if !session.authenticate_password(&jump_user, &jump_password).await? {
+    if !try_authenticate(&mut session, &jump_user, &jump_password).await? {
         return Err(anyhow::anyhow!("Jump host {}:{}:{} - Authentication failed: Invalid password or username", jump_host, jump_port, jump_user));
     }
 
