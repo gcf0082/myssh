@@ -68,6 +68,9 @@ cargo run -- -c "pwd" -n node2
 # Parallel execute with grouped per-node output (NOT for tail -f / streaming)
 cargo run -- -c "id" --sync
 
+# Pick a configured node by its host/IP instead of by id (mutually exclusive with --nodes)
+cargo run -- --ip 1.2.3.4 -c "cat /etc/hostname"
+
 # List nodes from config.yaml and exit (no SSH performed)
 cargo run -- --list-nodes          # node1, node2, node3
 cargo run -- --list-nodes -v       # id\thost:port\tuser\tdirect|via-jump

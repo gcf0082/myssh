@@ -114,6 +114,7 @@ const EXAMPLES: &str = "\
 Examples:
   myssh --command 'cat /etc/hostname'                              Run on all nodes
   myssh --command 'cat /etc/hostname' --nodes node1,node3          Run only on the given nodes
+  myssh --command 'cat /etc/hostname' --ip 1.2.3.4                 Pick a configured node by its host/IP
   myssh --command 'cat /etc/hostname' --prefix                     Prefix each output line with [node]
   myssh --command 'cat /etc/hostname' --sync                       Parallel execute, grouped per-node output
                                                                    (do NOT use with tail -f / ping-like streaming commands)
@@ -139,6 +140,9 @@ struct Cli {
     sync: bool,
     #[arg(long, help = "List nodes from config.yaml and exit (honors -v for details and -n to filter)")]
     list_nodes: bool,
+    #[arg(long, value_name = "ADDR", conflicts_with = "nodes",
+          help = "Select a configured node by its host/IP instead of by id (mutually exclusive with --nodes)")]
+    ip: Option<String>,
 }
 
 struct InteractiveSession {
@@ -379,6 +383,49 @@ fn get_node_names(ssh_config: &SshverConfig, target_node_ids: &Option<HashSet<St
     }
 }
 
+// 把 --ip / --nodes 解析成最终的 target_node_ids 集合：
+//   --ip <ADDR>：在 config.nodes 里按 host 字段查找匹配的节点，返回该节点的 id。
+//                没找到 → 报错；找到多个（host 重复）→ 报错并提示用 --nodes <id> 显式选一个。
+//   --nodes <list>：保持原行为，校验存在性后返回集合。
+//   两者互斥（clap 已通过 conflicts_with 处理），都不给则返回 None（= 全部节点）。
+fn resolve_targets(
+    cli: &Cli,
+    config: &SshverConfig,
+) -> Result<Option<HashSet<String>>> {
+    if let Some(ref addr) = cli.ip {
+        let matches: Vec<&NodeConfig> = config.nodes.iter().filter(|n| n.host == *addr).collect();
+        match matches.len() {
+            0 => anyhow::bail!("No node found in config.yaml with host: {}", addr),
+            1 => {
+                let mut set = HashSet::new();
+                set.insert(matches[0].id.clone());
+                return Ok(Some(set));
+            }
+            _ => {
+                let ids: Vec<String> = matches.iter().map(|n| n.id.clone()).collect();
+                anyhow::bail!(
+                    "Multiple nodes share host {}: {}. Use --nodes <id> to disambiguate.",
+                    addr, ids.join(", ")
+                );
+            }
+        }
+    }
+
+    let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
+        s.split(',').map(|id| id.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    });
+
+    if let Some(ref ids) = target_node_ids {
+        let all_node_ids: HashSet<String> = config.nodes.iter().map(|n| n.id.clone()).collect();
+        let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
+        if !missing_ids.is_empty() {
+            anyhow::bail!("Node(s) not found: {}", missing_ids.join(", "));
+        }
+    }
+
+    Ok(target_node_ids)
+}
+
 fn handle_special_command(
     session: &mut InteractiveSession,
     cmd: &str,
@@ -518,18 +565,13 @@ async fn run_interactive_session() -> Result<()> {
     let cli = Cli::parse();
     let ssh_config: SshverConfig = load_config()?;
 
-    let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
-        s.split(',').map(|id| id.trim().to_string()).collect()
-    });
-
-    if let Some(ref ids) = target_node_ids {
-        let all_node_ids: HashSet<String> = ssh_config.nodes.iter().map(|n| n.id.clone()).collect();
-        let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
-        if !missing_ids.is_empty() {
-            eprintln!("Error: Node(s) not found: {}", missing_ids.join(", "));
+    let target_node_ids = match resolve_targets(&cli, &ssh_config) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         }
-    }
+    };
 
     let mut session = InteractiveSession {
         cli,
@@ -610,18 +652,13 @@ async fn main() -> Result<()> {
     let config: SshverConfig = load_config()?;
 
     if cli.list_nodes {
-        let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
-            s.split(',').map(|id| id.trim().to_string()).collect()
-        });
-
-        if let Some(ref ids) = target_node_ids {
-            let all_node_ids: HashSet<String> = config.nodes.iter().map(|n| n.id.clone()).collect();
-            let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
-            if !missing_ids.is_empty() {
-                eprintln!("Error: Node(s) not found: {}", missing_ids.join(", "));
+        let target_node_ids = match resolve_targets(&cli, &config) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
-        }
+        };
 
         for line in format_node_list(&config, cli.verbose, &target_node_ids) {
             println!("{}", line);
@@ -634,18 +671,13 @@ async fn main() -> Result<()> {
     } else {
         let command = cli.command.as_ref().ok_or_else(|| anyhow::anyhow!("--command is required in non-interactive mode"))?;
 
-        let target_node_ids: Option<HashSet<String>> = cli.nodes.as_ref().map(|s| {
-            s.split(',').map(|id| id.trim().to_string()).collect()
-        });
-
-        if let Some(ref ids) = target_node_ids {
-            let all_node_ids: HashSet<String> = config.nodes.iter().map(|n| n.id.clone()).collect();
-            let missing_ids: Vec<String> = ids.iter().filter(|id| !all_node_ids.contains(*id)).cloned().collect();
-            if !missing_ids.is_empty() {
-                eprintln!("Error: Node(s) not found: {}", missing_ids.join(", "));
+        let target_node_ids = match resolve_targets(&cli, &config) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
-        }
+        };
 
         let any_failed = execute_on_all_nodes(&cli, &config, command, &target_node_ids, &None).await?;
 

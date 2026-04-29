@@ -52,6 +52,21 @@ myssh --command 'uptime' --nodes node1,node3
 
 逗号分隔节点 ID，不要有空格。如果有不存在的 ID，会立刻报 `Error: Node(s) not found: …` 并中止，不会发起任何 SSH 连接——打错字的代价很低。
 
+### 通过 host/IP 选节点：`--ip`
+
+记不住节点 id、只记得 IP 时，用 `--ip <addr>` 在 inventory 里按 host 查找匹配的节点：
+
+```
+myssh --command 'uptime' --ip 1.2.3.4
+```
+
+myssh 会在 `nodes[]` 里找 `host == 1.2.3.4` 的那条，再用它原本的 user/password/port/login_script 跑——等价于"先查 id 再 `--nodes <id>`"。**`--ip` 不会创建临时节点，IP 必须已经在 config 里**。
+
+边界：
+- IP 不在 config 里 → 报错并退出
+- 多条 node 共用同一个 host → 报错并提示用 `--nodes <id>` 消歧
+- 与 `--nodes` 互斥（clap 直接拒绝同时给两个）
+
 ## 控制输出格式
 
 下面两个参数是正交的，只影响 stdout 的呈现方式，不改变执行方式（始终是并行）：

@@ -36,6 +36,9 @@ cargo run -- --list-nodes                    # node1, node2, node3
 cargo run -- --list-nodes -v                 # 每行 tab 分隔：id  host:port  user  direct|via-jump
 cargo run -- --list-nodes -n node1,node3     # 只列指定节点
 
+# 通过 host/IP 选中已配置的节点（等价于查到该 host 的 --nodes <id>）
+cargo run -- --ip 1.2.3.4 --command "cat /etc/hostname"
+
 # 显示调试信息
 cargo run -- -c "uptime" --verbose
 
@@ -81,8 +84,22 @@ cargo run -- -i
 | `--interactive` | `-i` | 交互式模式（循环接收命令输入，类似 bash） | 否 |
 | `--sync` | | 并行执行但按节点顺序分块输出（见下方说明） | 否 |
 | `--list-nodes` | | 列出 `config.yaml` 中的节点后退出（配合 `-v` 显示详情，`-n` 过滤） | 否 |
+| `--ip` | | 通过 host/IP 选中已配置的节点（不必记 id），与 `--nodes` 互斥 | 否 |
 
 *注：在非交互式模式下，`--command` 为必填参数。在交互式模式下，不需要指定 `--command`。
+
+### `--ip` 说明
+
+`--ip` 是 `--nodes` 的一种"按地址而非按 id"的等价选法。给定一个 IP/host，myssh 在 `config.yaml` 的 `nodes[]` 里查 `host` 字段相同的节点，命中之后用它的全部配置（user / password / port / login_script / use_jump）执行命令——和直接 `--nodes <id>` 是同一个节点。
+
+```bash
+myssh --command 'cat /etc/hostname' --ip 1.2.3.4
+```
+
+边界行为：
+- IP 在 config 里**找不到** → 报错 `No node found in config.yaml with host: <addr>`，不发起 SSH
+- 多个节点共用同一个 host（罕见）→ 报错并提示用 `--nodes <id>` 显式选一个
+- 与 `--nodes` 互斥；与 `--list-nodes` 兼容（用 `--list-nodes --ip <addr>` 可以单独看那一台）
 
 ### `--sync` 说明
 
