@@ -13,40 +13,6 @@ lazy_static::lazy_static! {
     static ref STDOUT_LOCK: Mutex<()> = Mutex::new(());
 }
 
-// 登录链路各环节的超时上限。命令执行阶段（MY_begin / MY_end 之间）
-// 不在此处覆盖——`tail -f` 等流式命令需要长时间运行，由 Ctrl+C 收尾。
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
-const PROMPT_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
-
-// 认证：先 password，失败再尝试 keyboard-interactive
-// 不少 PAM 配置只允许 keyboard-interactive，纯 password 会被拒
-async fn try_authenticate(
-    session: &mut russh::client::Handle<ClientHandler>,
-    user: &str,
-    password: &str,
-) -> Result<bool> {
-    if session.authenticate_password(user, password).await? {
-        return Ok(true);
-    }
-    let mut resp = session
-        .authenticate_keyboard_interactive_start(user.to_string(), None)
-        .await?;
-    loop {
-        match resp {
-            russh::client::KeyboardInteractiveAuthResponse::Success => return Ok(true),
-            russh::client::KeyboardInteractiveAuthResponse::Failure => return Ok(false),
-            russh::client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-                // 把 password 应答给每个 prompt（绝大多数 PAM 流程只问一次密码）
-                let answers: Vec<String> = prompts.iter().map(|_| password.to_string()).collect();
-                resp = session
-                    .authenticate_keyboard_interactive_respond(answers)
-                    .await?;
-            }
-        }
-    }
-}
-
 // 行缓冲器：按行拆分输出，支持两种模式：
 //   直写模式（captured=None）：每行立即加锁写 stdout，保持现有流式行为
 //   捕获模式（captured=Some）：每行格式化后 push 进内部 Vec，由上层协调打印顺序
@@ -271,34 +237,17 @@ pub async fn execute_ssh(
         return Ok((true, Vec::new()));
     }
 
-    // 创建SSH配置并连接（带 connect 超时，避免不可达 IP 触发 OS-level TCP 重传死等）
+    // 创建SSH配置并连接
     let ssh_config = Arc::new(russh::client::Config::default());
 
-    let connect_fut = russh::client::connect(
+    let mut session = russh::client::connect(
         ssh_config,
         (&host as &str, port),
         ClientHandler,
-    );
-    let mut session = match tokio::time::timeout(CONNECT_TIMEOUT, connect_fut).await {
-        Ok(r) => r?,
-        Err(_) => return Err(anyhow::anyhow!(
-            "{}:{}:{} - Connection timed out after {}s",
-            host, port, user, CONNECT_TIMEOUT.as_secs()
-        )),
-    };
+    ).await?;
 
-    // 认证：先 password，失败兜底走 keyboard-interactive；整个 auth 阶段加超时
-    let auth_ok = match tokio::time::timeout(
-        AUTH_TIMEOUT,
-        try_authenticate(&mut session, &user, &password),
-    ).await {
-        Ok(r) => r?,
-        Err(_) => return Err(anyhow::anyhow!(
-            "{}:{}:{} - Authentication timed out after {}s",
-            host, port, user, AUTH_TIMEOUT.as_secs()
-        )),
-    };
-    if !auth_ok {
+    // 密码认证
+    if !session.authenticate_password(&user, &password).await? {
         return Err(anyhow::anyhow!("{}:{}:{} - Authentication failed: Invalid password or username", host, port, user));
     }
 
@@ -502,34 +451,16 @@ pub async fn execute_ssh_via_jump(
         eprintln!("[DEBUG][{}] Connecting to jump host {}:{} as {}", node_id, jump_host, jump_port, jump_user);
     }
 
-    // 连接跳板机（带 connect 超时）
+    // 连接跳板机
     let ssh_config = Arc::new(russh::client::Config::default());
 
-    let connect_fut = russh::client::connect(
+    let mut session = russh::client::connect(
         ssh_config,
         (&jump_host as &str, jump_port),
         ClientHandler,
-    );
-    let mut session = match tokio::time::timeout(CONNECT_TIMEOUT, connect_fut).await {
-        Ok(r) => r?,
-        Err(_) => return Err(anyhow::anyhow!(
-            "Jump host {}:{}:{} - Connection timed out after {}s",
-            jump_host, jump_port, jump_user, CONNECT_TIMEOUT.as_secs()
-        )),
-    };
+    ).await?;
 
-    // 跳板机认证（带超时）
-    let auth_ok = match tokio::time::timeout(
-        AUTH_TIMEOUT,
-        try_authenticate(&mut session, &jump_user, &jump_password),
-    ).await {
-        Ok(r) => r?,
-        Err(_) => return Err(anyhow::anyhow!(
-            "Jump host {}:{}:{} - Authentication timed out after {}s",
-            jump_host, jump_port, jump_user, AUTH_TIMEOUT.as_secs()
-        )),
-    };
-    if !auth_ok {
+    if !session.authenticate_password(&jump_user, &jump_password).await? {
         return Err(anyhow::anyhow!("Jump host {}:{}:{} - Authentication failed: Invalid password or username", jump_host, jump_port, jump_user));
     }
 
@@ -588,23 +519,16 @@ pub async fn execute_ssh_via_jump(
     }
     channel.data(ssh_cmd.as_bytes()).await?;
 
-    // 等待目标主机密码提示（带超时，避免目标主机不出 password 提示词时一直挂住）
+    // 等待目标主机密码提示
     let mut buf = String::new();
     let mut interrupted = false;
-    let mut timed_out = false;
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
-    let timeout_fut = tokio::time::sleep(PROMPT_WAIT_TIMEOUT);
-    tokio::pin!(timeout_fut);
 
     loop {
         tokio::select! {
             _ = ctrl_c.as_mut() => {
                 interrupted = true;
-                break;
-            }
-            _ = timeout_fut.as_mut() => {
-                timed_out = true;
                 break;
             }
             msg = channel.wait() => {
@@ -625,13 +549,6 @@ pub async fn execute_ssh_via_jump(
                 }
             }
         }
-    }
-
-    if timed_out {
-        return Err(anyhow::anyhow!(
-            "Target host {}:{}:{} - Timed out after {}s waiting for password prompt via jump host",
-            target_host, target_port, target_user, PROMPT_WAIT_TIMEOUT.as_secs()
-        ));
     }
 
     if interrupted {
