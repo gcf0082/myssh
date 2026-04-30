@@ -2,6 +2,8 @@
 
 Rust SSH 自动化工具，通过 `russh` 并行连接多台远程服务器并执行脚本化命令。
 
+> **同时提供 Python 版本**：`python/myssh.py` 是基于 [asyncssh](https://pypi.org/project/asyncssh/) 的对等实现，复用同一份 `config.yaml`，CLI flag 与 Rust 版完全一致（除交互式 `-i` 模式外）。在没装 Rust 工具链或 russh 跟某些老服务器握手有问题时可作为替代。安装：`pip install -r python/requirements.txt`，运行：`./python/myssh.py --command id`。
+
 ## 安装
 
 ```bash

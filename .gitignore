@@ -2,3 +2,5 @@ target/
 config.yaml
 config.*.yaml
 *.yaml_bak
+__pycache__/
+*.pyc
