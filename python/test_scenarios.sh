@@ -47,26 +47,28 @@ cp "$MYSSH_PY" "$TEST_DIR/myssh.py"
 # 且 trap 会在脚本结束时清理。
 # 注意：不带引号的 heredoc 里要把字面 `$` 转义为 `\$`，避免 bash 展开。
 cat > "$TEST_DIR/config.yaml" <<EOF
-# defaults.login_script: 全局登录脚本——以普通用户 SSH 登录后 su 到 root，
-# 模拟 Rust 文档里"普通用户登录然后切 root"的常见场景。
+# defaults.login_script: 跟 config.yaml.example 字面一致——以普通用户 SSH
+# 登录后 'su - root'，等到 Password: 提示再发密码（{{password}} 占位符）。
+# 这是 README 文档示意的"标准两步 login_script"流程。
 defaults:
   port: 22
   user: $NORMAL_USER
   password: $PASSWORD
   login_script:
-    - name: "wait normal-user prompt then su -"
+    - name: "SSH登录"
       wait: "\$"
-      send: "su -"
-    - name: "give su the password (uses {{password}} substitution)"
+      send: "su - root"
+    - name: "输入密码"
       wait: "Password:"
       send: "{{password}}"
 
 nodes:
-  # T-A: 直接走 defaults.login_script (su 到 root)
+  # T-A: 直接走 defaults.login_script —— 期望经过 'su - root' 之后命令以 root 身份执行
   - id: gcf-su
     host: $HOST
 
-  # T-B: 节点 override login_script——只做一个 noop step，不 su，最终保持 normal user
+  # T-B: 节点 override login_script —— noop step, 不 su, 保持普通用户身份。
+  #      跟 T-A 用同一台机器、同一普通用户, 唯一区别就是 login_script, 形成对照。
   - id: gcf-no-su
     host: $HOST
     login_script:
@@ -74,7 +76,8 @@ nodes:
         wait: "\$"
         send: "true"
 
-  # T-C: login_script_append——在 defaults 后追加一条，导出 env var 让命令侧能验证
+  # T-C: login_script_append —— 在 defaults (su - root + 输入密码) 之后追加一步,
+  #      在 root shell 里 export 一个 env 变量, 后续命令侧用 \$MYSSH_TEST_APPEND 验证.
   - id: gcf-su-append
     host: $HOST
     login_script_append:
@@ -82,7 +85,7 @@ nodes:
         wait: "#"
         send: "export MYSSH_TEST_APPEND=ran"
 
-  # T-D: root 直登——节点 override login_script，避免触发 defaults 的 su
+  # T-D: 节点级 user/password 完全覆盖 defaults, 直接 root 登录, login_script 仅消费提示符
   - id: root-direct
     host: $HOST
     user: root
@@ -160,34 +163,41 @@ assert_run "T08 --interactive is rejected with a clear v1-not-supported message"
     "${PY_RUN[@]}" -i
 
 echo
-echo "=== login_script scenarios (the focus of this run) ==="
+echo "=== login_script scenarios (本次重点: 先以普通用户登录, 再 su - root) ==="
 
-# T09: defaults.login_script 应用到 gcf-su，远端命令以 root 身份运行
-assert_run "T09 defaults.login_script: gcf登录后 su - 到 root" \
+# T09a: defaults.login_script 跑完后, whoami 应是 root —— 直观证据"身份发生切换"
+#       (login_script 没跑的话 whoami 会输出普通用户名 $NORMAL_USER)
+assert_run "T09a defaults.login_script: whoami=root (从普通用户 su - 后)" \
+    expect-pass '^root' \
+    "${PY_RUN[@]}" -c 'whoami' --nodes gcf-su
+
+# T09b: 同节点 + 同 login_script, id 应给出 uid=0(root)
+assert_run "T09b defaults.login_script: id 给出 uid=0(root)" \
     expect-pass 'uid=0\(root\)' \
-    "${PY_RUN[@]}" -c id --nodes gcf-su
+    "${PY_RUN[@]}" -c 'id' --nodes gcf-su
 
-# T10: 节点 override login_script 把 defaults 完全替换，命令以普通用户身份运行
-assert_run "T10 node-override login_script: 不 su，命令仍是普通用户身份" \
+# T10: 节点 override login_script (跳过 su) —— 同一台机器, 同一普通用户登录,
+#      仅 login_script 不一样, 命令身份就保持普通用户. 跟 T09 形成对照.
+assert_run "T10 node-override login_script: 不 su, 命令仍是普通用户 (对照 T09)" \
     expect-pass "uid=[0-9]+\\($NORMAL_USER\\)" \
-    "${PY_RUN[@]}" -c id --nodes gcf-no-su
+    "${PY_RUN[@]}" -c 'whoami; id' --nodes gcf-no-su
 
-# T11: login_script_append 在 defaults 后追加；通过 env var 验证 append 步骤实际跑了。
-# 注意: 远端 PTY 行尾是 CRLF, 行内会留 \r, 故只锚 ^ 不锚 $。
-assert_run "T11 login_script_append: append 步骤已执行 (env var 透传)" \
+# T11: login_script_append 在 defaults 后追加; 通过 env var 验证 append 步骤实际跑了.
+#      注: 远端 PTY 行尾是 CRLF, 行内会留 \r, 故只锚 ^ 不锚 $.
+assert_run "T11 login_script_append: append 步骤已执行 (env var 透传到命令)" \
     expect-pass '^marker=ran' \
     "${PY_RUN[@]}" -c 'echo "marker=$MYSSH_TEST_APPEND"' --nodes gcf-su-append
 
-# T12: 节点级密码 + 节点级 login_script override (root 直登)
-assert_run "T12 节点级 user/password 覆盖 defaults，root 直登成功" \
+# T12: 节点级 user/password 完全覆盖 defaults (root 直登)
+assert_run "T12 节点级 user/password 覆盖 defaults, root 直登成功" \
     expect-pass 'uid=0\(root\)' \
     "${PY_RUN[@]}" -c id --nodes root-direct
 
-# T13: {{password}} 占位符替换——T09 通过即间接验证；这里再用一条命令显式确认
-#      su 之后命令是 root，说明 send: "{{password}}" 被替换成了正确的 root 密码
-assert_run "T13 {{password}} 占位符在 login_script 里被正确替换" \
+# T13: {{password}} 占位符替换 —— defaults.login_script 第二步 send: "{{password}}",
+#      su - root 之后命令能跑成 uid=0 说明占位符被替换成了节点最终密码
+assert_run "T13 {{password}} 占位符在 login_script 里被正确替换为节点密码" \
     expect-pass 'uid=0\(root\)' \
-    "${PY_RUN[@]}" -c 'whoami; id' --nodes gcf-su
+    "${PY_RUN[@]}" -c 'id' --nodes gcf-su
 
 echo
 echo "=== Output formatting ==="
